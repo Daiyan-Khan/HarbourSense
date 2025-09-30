@@ -1,0 +1,16 @@
+{
+  "name": "port-sensor-sim",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "aws-iot-device-sdk": "^2.2.15",
+    "faker": "^6.6.6"
+  }
+}

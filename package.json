@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "node-dijkstra": "^2.5.1"
+  }
+}

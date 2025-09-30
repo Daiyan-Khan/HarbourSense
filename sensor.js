@@ -52,7 +52,7 @@ function createClient(sensorId) {
     certPath: './certs/certificate.pem',
     caPath: './certs/AmazonRootCA1.pem',
     clientId: `sensor-${sensorId}`,
-    host: 'your-iot-endpoint.amazonaws.com'  // Replace with your AWS IoT endpoint
+    host: 'a1dghi6and062t-ats.iot.us-east-1.amazonaws.com'
   });
 }
 

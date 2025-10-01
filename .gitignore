@@ -1,0 +1,16 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+*.pyc
+__pycache__/
+
+# Node.js dependencies
+node_modules/
+
+# Other common ignores
+.DS_Store
+Thumbs.db
+*.log
+.env
+.vscode

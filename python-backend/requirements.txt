@@ -1,0 +1,7 @@
+# requirements.txt
+fastapi
+uvicorn[standard]
+motor
+pydantic
+scikit-learn  # For ML in analyzers
+tensorflow   # For advanced ML if needed

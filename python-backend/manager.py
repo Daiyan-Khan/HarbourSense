@@ -9,6 +9,16 @@ MONGO_DETAILS = "mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkj
 client = AsyncIOMotorClient(MONGO_DETAILS)
 db = client.port
 
+# Priority mapping (customize as needed; higher number = higher priority)
+priority_map = {
+    'repair': 10,
+    'reroute': 7,
+    'transport': 5,
+    'monitor': 3,
+    'idle': 1
+    # Add more tasks here, e.g., 'offload': 6
+}
+
 @app.get("/manage_edges")
 async def manage_edges():
     # Fetch data
@@ -35,6 +45,9 @@ async def manage_edges():
         else:
             new_task = assigned_task['task']
 
+        # Update priority based on new task
+        new_priority = priority_map.get(new_task, 1)  # Default to 1 if task not in map
+
         # Check idle/active status
         status = 'active' if new_task != 'idle' else 'idle'
 
@@ -43,12 +56,13 @@ async def manage_edges():
             'status': status,
             'current_task': current_task,
             'new_task': new_task,
+            'new_priority': new_priority,  # Added for visibility
             'location': edge['currentLocation'],
             'next_node': edge.get('nextNode'),
             'congestion_level': congestion['level']
         })
 
-        # Update edge in DB
-        await db.edges.update_one({'id': edge['id']}, {'$set': {'task': new_task}})
+        # Update edge in DB with task and priority
+        await db.edges.update_one({'id': edge['id']}, {'$set': {'task': new_task, 'priority': new_priority}})
 
     return {'status': 'managed', 'commands': commands}

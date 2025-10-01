@@ -10,6 +10,8 @@ async function migrateSensors() {
 
     const db = client.db('port');
     const sensorListCol = db.collection('sensorList');
+     const deleteResult = await collection.deleteMany({});
+    console.log(`Deleted ${deleteResult.deletedCount} existing documents.`);
 
     // Your full sensor JSON array (paste the complete list here)
     const sensors = [

@@ -1,39 +1,51 @@
-# main.py - HarbourSense Python Backend
-
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime, timedelta
+from sklearn.ensemble import IsolationForest
+import numpy as np
+from bson import ObjectId  # Import this for type checking
+
+def fix_mongo_ids(document):
+    """Recursively convert ObjectId to str in MongoDB documents."""
+    if isinstance(document, list):
+        return [fix_mongo_ids(doc) for doc in document]
+    elif isinstance(document, dict):
+        new_doc = {}
+        for key, value in document.items():
+            if key == "_id" and isinstance(value, ObjectId):
+                new_doc[key] = str(value)
+            else:
+                new_doc[key] = fix_mongo_ids(value) if isinstance(value, (dict, list)) else value
+        return new_doc
+    else:
+        return document
 
 app = FastAPI()
 
-# MongoDB connection (use your URI; store securely in env vars for production)
+# CORS setup to allow frontend requests
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "*"  # Optional for testing; remove in production
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# MongoDB connection (rest of your code remains the same)
 MONGO_DETAILS = "mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net"
 client = AsyncIOMotorClient(MONGO_DETAILS)
-db = client.port  # 'port' database
-
+db = client.port
 # Health check endpoint
 @app.get("/")
 async def read_root():
     return {"message": "HarbourSense Python Backend is running"}
-
-# Endpoint to pull and return all sensor data
-@app.get("/sensors")
-async def get_sensors():
-    sensor_cursor = db.sensorData.find()
-    sensors = []
-    async for sensor in sensor_cursor:
-        sensor["_id"] = str(sensor["_id"])  # Convert ObjectId to string for JSON
-        sensors.append(sensor)
-    return sensors
-
-# Endpoint to pull and return all edges data
-@app.get("/edges")
-async def get_edges():
-    edges_cursor = db.edges.find()
-    edges = []
-    async for edge in edges_cursor:
-        edge["_id"] = str(edge["_id"])  # Convert ObjectId to string for JSON
-        edges.append(edge)
-    return edges
 
 @app.get('/analyze_sensors')
 async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
@@ -64,3 +76,25 @@ async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
 
     await db.sensorAlerts.insert_many(alerts)  # Store for decision maker
     return {'status': 'analyzed', 'alerts': len(alerts)}
+
+@app.get("/api/edges")
+async def get_edges():
+    edges = [doc async for doc in db.edges.find()]
+    return fix_mongo_ids(edges)  # Returns list of edges with id, currentLocation, task, speed, nextNode, etc.
+
+@app.get("/api/sensors")
+async def get_sensors():
+    sensors = [doc async for doc in db.sensorData.find().sort("timestamp", -1).limit(100)]  # Latest sensors
+    return fix_mongo_ids(sensors)  # Returns list with id, node, reading, type, etc.
+
+@app.get("/api/graph")
+async def get_graph():
+    cursor = db.graph.find()  # Fetch all node documents
+    all_nodes = {}
+    async for doc in cursor:
+        node_id = doc.get('id')
+        if node_id:
+            doc.pop('_id', None)  # Remove internal Mongo field for clean JSON
+            all_nodes[node_id] = doc
+    return {"nodes": all_nodes}
+

@@ -3,6 +3,7 @@
     "aws-iot-device-sdk": "^2.2.15",
     "aws-iot-device-sdk-v2": "^1.23.0",
     "mongodb": "^6.20.0",
-    "node-dijkstra": "^2.5.1"
+    "node-dijkstra": "^2.5.1",
+    "react-flow-renderer": "^10.3.17"
   }
 }

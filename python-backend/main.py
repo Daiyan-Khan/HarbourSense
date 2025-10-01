@@ -34,3 +34,33 @@ async def get_edges():
         edge["_id"] = str(edge["_id"])  # Convert ObjectId to string for JSON
         edges.append(edge)
     return edges
+
+@app.get('/analyze_sensors')
+async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
+    query = {} if sensor_type == 'all' else {'type': sensor_type}
+    start_time = datetime.now() - timedelta(minutes=window_mins)
+    query['timestamp'] = {'$gt': start_time}
+
+    cursor = db.sensorData.find(query).sort('timestamp', -1)
+    data = []
+    docs = []
+    async for doc in cursor:
+        reading = float(doc.get('reading', 0))  # Assume numeric for simplicity
+        data.append([reading])
+        docs.append(doc)
+
+    if not data:
+        return {'status': 'no data'}
+
+    # Simple anomaly detection
+    model = IsolationForest(contamination=0.1)
+    labels = model.fit_predict(np.array(data))
+
+    alerts = []
+    for doc, label in zip(docs, labels):
+        alert = label < 0  # Anomaly
+        suggestion = 'repair' if alert and doc['type'] == 'vibration' else 'monitor'
+        alerts.append({'id': doc['id'], 'alert': alert, 'suggestion': suggestion, 'node': doc['node']})
+
+    await db.sensorAlerts.insert_many(alerts)  # Store for decision maker
+    return {'status': 'analyzed', 'alerts': len(alerts)}

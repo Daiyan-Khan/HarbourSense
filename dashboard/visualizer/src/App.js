@@ -1,7 +1,25 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import ReactFlow, { Background, Controls } from 'reactflow';
+import React, { useEffect, useState } from 'react';
+import ReactFlow, { Background, Controls, BaseEdge } from 'reactflow';
 import 'reactflow/dist/style.css';
 import axios from 'axios';
+
+// === Node dimensions ===
+const NODE_WIDTH = 150;
+const NODE_HEIGHT = 100;
+const H_SPACING = 100; // horizontal gap
+const V_SPACING = 100; // vertical gap
+
+// Custom edge that only draws straight horiz/vert lines
+const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
+  const [edgePath] = [`M${sourceX},${sourceY} L${targetX},${targetY}`];
+  return (
+    <BaseEdge
+      path={edgePath}
+      markerEnd={markerEnd}
+      style={{ stroke: '#222', strokeWidth: 2 }}
+    />
+  );
+};
 
 function App() {
   const [nodes, setNodes] = useState([]);
@@ -9,23 +27,18 @@ function App() {
   const [liveEdges, setLiveEdges] = useState([]);
   const [sensors, setSensors] = useState([]);
   const [selectedEdge, setSelectedEdge] = useState(null);
-
   const [showSensorMenu, setShowSensorMenu] = useState(false);
   const [selectedNodeSensors, setSelectedNodeSensors] = useState([]);
   const [selectedSensor, setSelectedSensor] = useState(null);
 
   const BASE_URL = 'http://localhost:8000';
 
-  const nodeTypes = useMemo(() => ({}), []);
-  const edgeTypes = useMemo(() => ({}), []);
-
-  // Grid layout with bigger horizontal spacing
-  function gridLayout(nodeList) {
+  // Grid layout function
+  const gridLayout = (rawNodes) => {
     const positions = {};
-    nodeList.forEach(node => {
-      const nodeId = node.id;
-      let prefix = nodeId.match(/[a-zA-Z]+/)[0];
-      let suffix = nodeId.match(/[0-9]+/)[0];
+    rawNodes.forEach((node) => {
+      const prefix = node.id.match(/[A-Z]+/)[0];
+      const suffix = parseInt(node.id.match(/[0-9]+/)[0], 10);
 
       let row = 0;
       for (let i = 0; i < prefix.length; i++) {
@@ -33,42 +46,75 @@ function App() {
       }
       row -= 1;
 
-      let col = parseInt(suffix, 10) - 1;
-      // Increase spacing: 200px horizontal, 150px vertical
-      positions[nodeId] = { x: col * 200, y: row * 150 };
+      const col = suffix - 1;
+
+      positions[node.id] = {
+        x: col * (NODE_WIDTH + H_SPACING),
+        y: row * (NODE_HEIGHT + V_SPACING),
+      };
     });
     return positions;
-  }
+  };
 
   useEffect(() => {
     const fetchGraph = async () => {
       try {
         const res = await axios.get(`${BASE_URL}/api/graph`);
-        const graphNodesRaw = Object.values(res.data.nodes || {});
-        const positions = gridLayout(graphNodesRaw);
+        const rawNodes = Object.values(res.data.nodes || {});
+        const positions = gridLayout(rawNodes);
 
-        const graphNodes = graphNodesRaw.map(n => ({
+        // === Build nodes ===
+        const graphNodes = rawNodes.map((n) => ({
           id: n.id,
           data: { label: `${n.id} (${n.type})` },
           position: positions[n.id],
+          style: {
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            border: '2px solid #444',
+            borderRadius: 6,
+            background: '#f8f8f8',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          },
         }));
 
+        // === Build edges anchored on correct sides ===
         const graphEdges = [];
-        graphNodesRaw.forEach(node => {
-          Object.values(node.neighbors || {}).forEach(neighborId => {
-            // compute simple Euclidean distance
-            const pos1 = positions[node.id];
-            const pos2 = positions[neighborId];
-            let dx = pos1.x - pos2.x;
-            let dy = pos1.y - pos2.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+        rawNodes.forEach((node) => {
+          Object.values(node.neighbors || {}).forEach((nbrId) => {
+            const srcPos = positions[node.id];
+            const tgtPos = positions[nbrId];
+
+            let sourceX, sourceY, targetX, targetY;
+
+            if (srcPos.y === tgtPos.y) {
+              // Horizontal
+              sourceX = srcPos.x + NODE_WIDTH;
+              sourceY = srcPos.y + NODE_HEIGHT / 2;
+              targetX = tgtPos.x;
+              targetY = tgtPos.y + NODE_HEIGHT / 2;
+            } else if (srcPos.x === tgtPos.x) {
+              // Vertical
+              sourceX = srcPos.x + NODE_WIDTH / 2;
+              sourceY = srcPos.y + NODE_HEIGHT;
+              targetX = tgtPos.x + NODE_WIDTH / 2;
+              targetY = tgtPos.y;
+            } else {
+              // Fallback: center-to-center
+              sourceX = srcPos.x + NODE_WIDTH / 2;
+              sourceY = srcPos.y + NODE_HEIGHT / 2;
+              targetX = tgtPos.x + NODE_WIDTH / 2;
+              targetY = tgtPos.y + NODE_HEIGHT / 2;
+            }
 
             graphEdges.push({
-              id: `${node.id}-${neighborId}`,
+              id: `${node.id}-${nbrId}`,
               source: node.id,
-              target: neighborId,
-              animated: true,
-              label: `${dist.toFixed(0)}m`
+              target: nbrId,
+              type: 'side',
+              data: { sourceX, sourceY, targetX, targetY },
             });
           });
         });
@@ -76,12 +122,13 @@ function App() {
         setNodes(graphNodes);
         setEdges(graphEdges);
       } catch (err) {
-        console.error('Error fetching graph:', err);
+        console.error(err);
       }
     };
     fetchGraph();
   }, []);
 
+  // Fetch live edges & sensors
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
@@ -89,23 +136,36 @@ function App() {
         setLiveEdges(edgesRes.data);
 
         const sensorsRes = await axios.get(`${BASE_URL}/api/sensors`);
-        // Deduplicate by id
-        const uniqueSensors = Array.from(
-          new Map(sensorsRes.data.map(s => [s.id, s])).values()
-        );
+        const uniqueSensors = Array.from(new Map(sensorsRes.data.map((s) => [s.id, s])).values());
         setSensors(uniqueSensors);
       } catch (error) {
         console.error('Error fetching live data:', error);
       }
     };
-
     fetchLiveData();
     const interval = setInterval(fetchLiveData, 3000);
     return () => clearInterval(interval);
   }, []);
 
+  // Override edge renderer to use our custom coords
+  const edgeTypes = {
+    side: ({ id, data, markerEnd }) => {
+      const { sourceX, sourceY, targetX, targetY } = data;
+      return (
+        <SideEdge
+          id={id}
+          sourceX={sourceX}
+          sourceY={sourceY}
+          targetX={targetX}
+          targetY={targetY}
+          markerEnd={markerEnd}
+        />
+      );
+    },
+  };
+
   const onNodeClick = (event, node) => {
-    const nodeSensors = sensors.filter(s => s.node === node.id);
+    const nodeSensors = sensors.filter((s) => s.node === node.id);
     setSelectedNodeSensors(nodeSensors);
     setShowSensorMenu(true);
     setSelectedSensor(null);
@@ -113,21 +173,20 @@ function App() {
 
   const onEdgeClick = (event, edge) => {
     const clickedEdge = liveEdges.find(
-      e => e.currentLocation === edge.source && e.nextNode === edge.target
+      (e) => e.currentLocation === edge.source && e.nextNode === edge.target
     );
     if (clickedEdge) setSelectedEdge(clickedEdge);
   };
 
   return (
-    <div style={{ height: '600px' }}>
-      <h2>HarbourSense Live Dashboard</h2>
+    <div style={{ height: '100vh' }}>
+      <h2>HarbourSense Clean Grid Graph</h2>
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
         onEdgeClick={onEdgeClick}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
         fitView
       >
         <Background />
@@ -154,7 +213,7 @@ function App() {
         >
           <h3>Sensors at Node</h3>
           <ul style={{ listStyle: 'none', padding: 0, marginBottom: 10 }}>
-            {selectedNodeSensors.map(sensor => (
+            {selectedNodeSensors.map((sensor) => (
               <li key={sensor.id} style={{ marginBottom: 8 }}>
                 <button
                   style={{
@@ -180,6 +239,7 @@ function App() {
               </li>
             ))}
           </ul>
+
           <button
             onClick={() => setShowSensorMenu(false)}
             style={{
@@ -194,13 +254,7 @@ function App() {
           </button>
 
           {selectedSensor && (
-            <div
-              style={{
-                marginTop: 20,
-                borderTop: '1px solid #ddd',
-                paddingTop: 12,
-              }}
-            >
+            <div style={{ marginTop: 20, borderTop: '1px solid #ddd', paddingTop: 12 }}>
               <h4>Sensor Data</h4>
               <p><b>ID:</b> {selectedSensor.id}</p>
               <p><b>Type:</b> {selectedSensor.type}</p>

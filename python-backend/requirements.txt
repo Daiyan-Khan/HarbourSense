@@ -1,7 +1,9 @@
 # requirements.txt
+heapq
 fastapi
 uvicorn[standard]
 motor
 pydantic
 scikit-learn  # For ML in analyzers
 tensorflow   # For advanced ML if needed
+paho-mqtt

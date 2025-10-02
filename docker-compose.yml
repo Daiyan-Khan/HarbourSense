@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  python-backend:
+    build: ./python-backend
+    environment:
+      - MONGO_URI=mongodb://mongo:27017  # If using a MongoDB container
+    depends_on:
+      - mongo  # Add if needed
+
+  port-sim:
+    build: ./port-sim
+    depends_on:
+      - python-backend  # Simulations depend on backend
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3000:3000"  # Expose dashboard UI
+    depends_on:
+      - python-backend
+
+  mongo:  # Optional MongoDB service
+    image: mongo:latest
+    ports:
+      - "27017:27017"

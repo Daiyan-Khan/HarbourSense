@@ -98,5 +98,265 @@
     "id": "conveyor003",
     "desc": "Smart conveyor with sensors",
     "roles": ["transport", "monitoring"]
+  },
+  {
+    "id": "truck004",
+    "desc": "Autonomous electric truck",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "truck005",
+    "desc": "Bulk cargo transport truck",
+    "roles": ["transport", "offloading"]
+  },
+  {
+    "id": "truck006",
+    "desc": "Refrigerated container truck",
+    "roles": ["transport"]
+  },
+  {
+    "id": "truck007",
+    "desc": "Maintenance utility truck",
+    "roles": ["maintenance"]
+  },
+  {
+    "id": "truck008",
+    "desc": "Fuel-efficient yard truck",
+    "roles": ["transport"]
+  },
+  {
+    "id": "truck009",
+    "desc": "Heavy-lift transport truck",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "truck010",
+    "desc": "Security patrol truck",
+    "roles": ["monitoring"]
+  },
+  {
+    "id": "crane004",
+    "desc": "Rubber-tired gantry crane",
+    "roles": ["loading", "offloading"]
+  },
+  {
+    "id": "crane005",
+    "desc": "Overhead bridge crane",
+    "roles": ["loading"]
+  },
+  {
+    "id": "crane006",
+    "desc": "Floating crane for heavy lifts",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "crane007",
+    "desc": "Automated stacking crane",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "crane008",
+    "desc": "Portal crane at dock",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "agv004",
+    "desc": "Multi-load AGV",
+    "roles": ["transport"]
+  },
+  {
+    "id": "agv005",
+    "desc": "Laser-guided AGV",
+    "roles": ["transport"]
+  },
+  {
+    "id": "agv006",
+    "desc": "Vision-based navigation AGV",
+    "roles": ["transport", "monitoring"]
+  },
+  {
+    "id": "agv007",
+    "desc": "Heavy-duty port AGV",
+    "roles": ["transport"]
+  },
+  {
+    "id": "agv008",
+    "desc": "Compact warehouse AGV",
+    "roles": ["transport"]
+  },
+  {
+    "id": "drone004",
+    "desc": "Thermal imaging drone",
+    "roles": ["monitoring", "maintenance"]
+  },
+  {
+    "id": "drone005",
+    "desc": "Delivery drone for small parts",
+    "roles": ["transport"]
+  },
+  {
+    "id": "drone006",
+    "desc": "Survey drone for mapping",
+    "roles": ["monitoring"]
+  },
+  {
+    "id": "drone007",
+    "desc": "Security drone with AI",
+    "roles": ["monitoring"]
+  },
+  {
+    "id": "drone008",
+    "desc": "Inspection drone for cranes",
+    "roles": ["maintenance"]
+  },
+  {
+    "id": "forklift004",
+    "desc": "Electric warehouse forklift",
+    "roles": ["loading", "offloading"]
+  },
+  {
+    "id": "forklift005",
+    "desc": "Telescopic boom forklift",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "forklift006",
+    "desc": "Automated guided forklift",
+    "roles": ["transport"]
+  },
+  {
+    "id": "forklift007",
+    "desc": "Rough terrain forklift",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "forklift008",
+    "desc": "Narrow-aisle forklift",
+    "roles": ["loading"]
+  },
+  {
+    "id": "conveyor004",
+    "desc": "Roller conveyor system",
+    "roles": ["transport"]
+  },
+  {
+    "id": "conveyor005",
+    "desc": "Overhead conveyor for light loads",
+    "roles": ["transport"]
+  },
+  {
+    "id": "conveyor006",
+    "desc": "Pneumatic conveyor for bulk",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "conveyor007",
+    "desc": "Chain-driven conveyor",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "conveyor008",
+    "desc": "Modular conveyor belt",
+    "roles": ["transport"]
+  },
+  {
+    "id": "robot003",
+    "desc": "Picking robot for warehouse",
+    "roles": ["loading", "offloading"]
+  },
+  {
+    "id": "robot004",
+    "desc": "Cleaning robot for docks",
+    "roles": ["maintenance"]
+  },
+  {
+    "id": "robot005",
+    "desc": "Security patrol robot",
+    "roles": ["monitoring"]
+  },
+  {
+    "id": "robot006",
+    "desc": "Inventory management robot",
+    "roles": ["monitoring", "transport"]
+  },
+  {
+    "id": "robot007",
+    "desc": "Welding robot for repairs",
+    "roles": ["maintenance"]
+  },
+  {
+    "id": "robot008",
+    "desc": "Autonomous tug robot",
+    "roles": ["transport"]
+  },
+  {
+    "id": "truck011",
+    "desc": "Hybrid power truck",
+    "roles": ["transport"]
+  },
+  {
+    "id": "truck012",
+    "desc": "Container straddle carrier",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "crane009",
+    "desc": "Jib crane for small vessels",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "crane010",
+    "desc": "Tower crane for construction",
+    "roles": ["maintenance"]
+  },
+  {
+    "id": "agv009",
+    "desc": "Forklift AGV hybrid",
+    "roles": ["transport", "loading"]
+  },
+  {
+    "id": "agv010",
+    "desc": "Towing AGV for trailers",
+    "roles": ["transport"]
+  },
+  {
+    "id": "drone009",
+    "desc": "LiDAR scanning drone",
+    "roles": ["monitoring"]
+  },
+  {
+    "id": "drone010",
+    "desc": "Payload delivery drone",
+    "roles": ["transport"]
+  },
+  {
+    "id": "forklift009",
+    "desc": "Side-loading forklift",
+    "roles": ["loading"]
+  },
+  {
+    "id": "forklift010",
+    "desc": "Multi-directional forklift",
+    "roles": ["transport"]
+  },
+  {
+    "id": "conveyor009",
+    "desc": "Screw conveyor for grains",
+    "roles": ["offloading"]
+  },
+  {
+    "id": "conveyor010",
+    "desc": "Vibratory conveyor",
+    "roles": ["transport"]
+  },
+  {
+    "id": "robot009",
+    "desc": "Collaborative robot arm",
+    "roles": ["loading"]
+  },
+  {
+    "id": "robot010",
+    "desc": "Swarm robot for inventory",
+    "roles": ["monitoring"]
   }
 ]

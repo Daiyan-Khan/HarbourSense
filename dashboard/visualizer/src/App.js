@@ -3,28 +3,41 @@ import ReactFlow, { Background, Controls, BaseEdge } from 'reactflow';
 import 'reactflow/dist/style.css';
 import axios from 'axios';
 
-// === Node dimensions ===
+// Node & Device sizes
 const NODE_WIDTH = 150;
 const NODE_HEIGHT = 100;
-
-// Device size
 const DEVICE_SIZE = 30;
 
-// Custom edge (straight line)
+// Custom straight edge
 const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
   const edgePath = `M${sourceX},${sourceY} L${targetX},${targetY}`;
   return <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ stroke: '#222', strokeWidth: 2 }} />;
 };
 
-// Compute device position based on node location
+// Compute device position
 const computeDevicePosition = (device, nodePositions) => {
-  const nodeId = device.location; // your API gives "D3", "F10", etc.
-  const currPos = nodePositions[nodeId];
-  if (!currPos) return { x: 0, y: 0 };
+  const loc = device.location;
 
+  // If en-route device (e.g., "A1-A2")
+  if (loc.includes('-')) {
+    const [startNode, endNode] = loc.split('-');
+    const startPos = nodePositions[startNode];
+    const endPos = nodePositions[endNode];
+    if (!startPos || !endPos) return { x: 0, y: 0 };
+
+    // Place device **midway between two nodes**
+    return {
+      x: (startPos.x + NODE_WIDTH / 2 + endPos.x + NODE_WIDTH / 2) / 2 - DEVICE_SIZE / 2,
+      y: (startPos.y + NODE_HEIGHT / 2 + endPos.y + NODE_HEIGHT / 2) / 2 - DEVICE_SIZE / 2,
+    };
+  }
+
+  // Single-node device
+  const nodePos = nodePositions[loc];
+  if (!nodePos) return { x: 0, y: 0 };
   return {
-    x: currPos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
-    y: currPos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
+    x: nodePos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
+    y: nodePos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
   };
 };
 
@@ -84,7 +97,6 @@ function App() {
 
   const BASE_URL = 'http://localhost:8000';
 
-  // Edge types
   const edgeTypes = useMemo(
     () => ({
       side: ({ id, data, markerEnd }) => {
@@ -95,7 +107,7 @@ function App() {
     []
   );
 
-  // Grid layout for nodes: e.g., A1=0,0 ; B1=0,100
+  // Grid layout: "A1" -> x,y
   const gridLayout = (rawNodes) => {
     const positions = {};
     rawNodes.forEach((node) => {
@@ -117,7 +129,7 @@ function App() {
     return positions;
   };
 
-  // Fetch graph nodes and edges
+  // Fetch graph
   useEffect(() => {
     const fetchGraph = async () => {
       try {

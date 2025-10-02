@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import ReactFlow, { Background, Controls, BaseEdge } from 'reactflow';
 import 'reactflow/dist/style.css';
 import axios from 'axios';
@@ -6,34 +6,96 @@ import axios from 'axios';
 // === Node dimensions ===
 const NODE_WIDTH = 150;
 const NODE_HEIGHT = 100;
-const H_SPACING = 100; // horizontal gap
-const V_SPACING = 100; // vertical gap
 
-// Custom edge that only draws straight horiz/vert lines
+// Device size
+const DEVICE_SIZE = 30;
+
+// Custom edge (straight line)
 const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
-  const [edgePath] = [`M${sourceX},${sourceY} L${targetX},${targetY}`];
-  return (
-    <BaseEdge
-      path={edgePath}
-      markerEnd={markerEnd}
-      style={{ stroke: '#222', strokeWidth: 2 }}
-    />
-  );
+  const edgePath = `M${sourceX},${sourceY} L${targetX},${targetY}`;
+  return <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ stroke: '#222', strokeWidth: 2 }} />;
 };
 
+// Compute device position based on node location
+const computeDevicePosition = (device, nodePositions) => {
+  const nodeId = device.location; // your API gives "D3", "F10", etc.
+  const currPos = nodePositions[nodeId];
+  if (!currPos) return { x: 0, y: 0 };
+
+  return {
+    x: currPos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
+    y: currPos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
+  };
+};
+
+// Map devices to React Flow nodes
+const mapDevicesToNodes = (devices, nodePositions) =>
+  devices.map((d) => {
+    const pos = computeDevicePosition(d, nodePositions);
+
+    let label = '⚙️';
+    let background = '#ccc';
+    let borderRadius = '50%';
+
+    if (d.type.toLowerCase().includes('truck')) {
+      label = '🚚';
+      background = 'saddlebrown';
+      borderRadius = '5px';
+    } else if (d.type.toLowerCase().includes('conveyor')) {
+      label = '⬭';
+      background = 'grey';
+      borderRadius = '50% / 25%';
+    } else if (d.type.toLowerCase().includes('robot')) {
+      label = '🤖';
+      background = 'lightgreen';
+      borderRadius = '50%';
+    }
+
+    return {
+      id: `dev-${d.id}`,
+      position: pos,
+      data: { label },
+      style: {
+        width: DEVICE_SIZE,
+        height: DEVICE_SIZE,
+        background,
+        borderRadius,
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        fontSize: 18,
+        cursor: 'pointer',
+        border: '1px solid #333',
+      },
+      draggable: false,
+    };
+  });
+
 function App() {
-  const [nodes, setNodes] = useState([]);
+  const [graphNodes, setGraphNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [liveEdges, setLiveEdges] = useState([]);
   const [sensors, setSensors] = useState([]);
-  const [selectedEdge, setSelectedEdge] = useState(null);
+  const [positions, setPositions] = useState({});
   const [showSensorMenu, setShowSensorMenu] = useState(false);
   const [selectedNodeSensors, setSelectedNodeSensors] = useState([]);
   const [selectedSensor, setSelectedSensor] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
 
   const BASE_URL = 'http://localhost:8000';
 
-  // Grid layout function
+  // Edge types
+  const edgeTypes = useMemo(
+    () => ({
+      side: ({ id, data, markerEnd }) => {
+        const { sourceX, sourceY, targetX, targetY } = data;
+        return <SideEdge id={id} sourceX={sourceX} sourceY={sourceY} targetX={targetX} targetY={targetY} markerEnd={markerEnd} />;
+      },
+    }),
+    []
+  );
+
+  // Grid layout for nodes: e.g., A1=0,0 ; B1=0,100
   const gridLayout = (rawNodes) => {
     const positions = {};
     rawNodes.forEach((node) => {
@@ -45,29 +107,29 @@ function App() {
         row = row * 26 + (prefix.charCodeAt(i) - 'A'.charCodeAt(0) + 1);
       }
       row -= 1;
-
       const col = suffix - 1;
 
       positions[node.id] = {
-        x: col * (NODE_WIDTH + H_SPACING),
-        y: row * (NODE_HEIGHT + V_SPACING),
+        x: col * (NODE_WIDTH + 100),
+        y: row * (NODE_HEIGHT + 100),
       };
     });
     return positions;
   };
 
+  // Fetch graph nodes and edges
   useEffect(() => {
     const fetchGraph = async () => {
       try {
         const res = await axios.get(`${BASE_URL}/api/graph`);
         const rawNodes = Object.values(res.data.nodes || {});
-        const positions = gridLayout(rawNodes);
+        const pos = gridLayout(rawNodes);
+        setPositions(pos);
 
-        // === Build nodes ===
-        const graphNodes = rawNodes.map((n) => ({
+        const gNodes = rawNodes.map((n) => ({
           id: n.id,
           data: { label: `${n.id} (${n.type})` },
-          position: positions[n.id],
+          position: pos[n.id],
           style: {
             width: NODE_WIDTH,
             height: NODE_HEIGHT,
@@ -80,29 +142,24 @@ function App() {
           },
         }));
 
-        // === Build edges anchored on correct sides ===
         const graphEdges = [];
         rawNodes.forEach((node) => {
           Object.values(node.neighbors || {}).forEach((nbrId) => {
-            const srcPos = positions[node.id];
-            const tgtPos = positions[nbrId];
+            const srcPos = pos[node.id];
+            const tgtPos = pos[nbrId];
 
             let sourceX, sourceY, targetX, targetY;
-
             if (srcPos.y === tgtPos.y) {
-              // Horizontal
               sourceX = srcPos.x + NODE_WIDTH;
               sourceY = srcPos.y + NODE_HEIGHT / 2;
               targetX = tgtPos.x;
               targetY = tgtPos.y + NODE_HEIGHT / 2;
             } else if (srcPos.x === tgtPos.x) {
-              // Vertical
               sourceX = srcPos.x + NODE_WIDTH / 2;
               sourceY = srcPos.y + NODE_HEIGHT;
               targetX = tgtPos.x + NODE_WIDTH / 2;
               targetY = tgtPos.y;
             } else {
-              // Fallback: center-to-center
               sourceX = srcPos.x + NODE_WIDTH / 2;
               sourceY = srcPos.y + NODE_HEIGHT / 2;
               targetX = tgtPos.x + NODE_WIDTH / 2;
@@ -119,7 +176,7 @@ function App() {
           });
         });
 
-        setNodes(graphNodes);
+        setGraphNodes(gNodes);
         setEdges(graphEdges);
       } catch (err) {
         console.error(err);
@@ -128,7 +185,7 @@ function App() {
     fetchGraph();
   }, []);
 
-  // Fetch live edges & sensors
+  // Fetch live devices & sensors
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
@@ -147,46 +204,27 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Override edge renderer to use our custom coords
-  const edgeTypes = {
-    side: ({ id, data, markerEnd }) => {
-      const { sourceX, sourceY, targetX, targetY } = data;
-      return (
-        <SideEdge
-          id={id}
-          sourceX={sourceX}
-          sourceY={sourceY}
-          targetX={targetX}
-          targetY={targetY}
-          markerEnd={markerEnd}
-        />
-      );
-    },
-  };
-
   const onNodeClick = (event, node) => {
-    const nodeSensors = sensors.filter((s) => s.node === node.id);
-    setSelectedNodeSensors(nodeSensors);
-    setShowSensorMenu(true);
-    setSelectedSensor(null);
-  };
-
-  const onEdgeClick = (event, edge) => {
-    const clickedEdge = liveEdges.find(
-      (e) => e.currentLocation === edge.source && e.nextNode === edge.target
-    );
-    if (clickedEdge) setSelectedEdge(clickedEdge);
+    if (node.id.startsWith('dev-')) {
+      const devId = node.id.substring(4);
+      const dev = liveEdges.find((d) => d.id === devId);
+      if (dev) setSelectedDevice(dev);
+    } else {
+      const nodeSensors = sensors.filter((s) => s.node === node.id);
+      setSelectedNodeSensors(nodeSensors);
+      setShowSensorMenu(true);
+      setSelectedSensor(null);
+    }
   };
 
   return (
     <div style={{ height: '100vh' }}>
-      <h2>HarbourSense Clean Grid Graph</h2>
+      <h2>HarbourSense Smart Port</h2>
       <ReactFlow
-        nodes={nodes}
+        nodes={[...graphNodes, ...mapDevicesToNodes(liveEdges, positions)]}
         edges={edges}
         edgeTypes={edgeTypes}
         onNodeClick={onNodeClick}
-        onEdgeClick={onEdgeClick}
         fitView
       >
         <Background />
@@ -220,14 +258,8 @@ function App() {
                     padding: '6px 12px',
                     borderRadius: 5,
                     border: '1px solid #ddd',
-                    background:
-                      selectedSensor && selectedSensor.id === sensor.id
-                        ? '#007bff'
-                        : '#f0f0f3',
-                    color:
-                      selectedSensor && selectedSensor.id === sensor.id
-                        ? 'white'
-                        : 'black',
+                    background: selectedSensor && selectedSensor.id === sensor.id ? '#007bff' : '#f0f0f3',
+                    color: selectedSensor && selectedSensor.id === sensor.id ? 'white' : 'black',
                     cursor: 'pointer',
                     width: '100%',
                     display: 'block',
@@ -242,13 +274,7 @@ function App() {
 
           <button
             onClick={() => setShowSensorMenu(false)}
-            style={{
-              background: '#eee',
-              borderRadius: 5,
-              border: '1px solid #ccc',
-              padding: '5px 14px',
-              cursor: 'pointer',
-            }}
+            style={{ background: '#eee', borderRadius: 5, border: '1px solid #ccc', padding: '5px 14px', cursor: 'pointer' }}
           >
             Close
           </button>
@@ -256,33 +282,54 @@ function App() {
           {selectedSensor && (
             <div style={{ marginTop: 20, borderTop: '1px solid #ddd', paddingTop: 12 }}>
               <h4>Sensor Data</h4>
-              <p><b>ID:</b> {selectedSensor.id}</p>
-              <p><b>Type:</b> {selectedSensor.type}</p>
-              <p><b>Reading:</b> {selectedSensor.reading}</p>
-              <p><b>Timestamp:</b> {new Date(selectedSensor.timestamp).toLocaleString()}</p>
+              {Object.entries(selectedSensor).map(([k, v]) => (
+                <p key={k}>
+                  <b>{k}:</b> {String(v)}
+                </p>
+              ))}
             </div>
           )}
         </div>
       )}
 
-      {/* Edge sidebar */}
-      {selectedEdge && (
+      {/* Device popup */}
+      {selectedDevice && (
         <div
           style={{
             position: 'fixed',
-            top: 20,
-            right: 20,
-            padding: 20,
+            top: '20%',
+            left: '35%',
             background: 'white',
-            border: '1px solid gray',
+            padding: 20,
+            border: '1px solid #aaa',
+            borderRadius: 8,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+            minWidth: 400,
+            zIndex: 2000,
           }}
         >
-          <h3>Edge Details</h3>
-          <p><b>ID:</b> {selectedEdge.id}</p>
-          <p><b>Task:</b> {selectedEdge.task}</p>
-          <p><b>Speed:</b> {selectedEdge.speed}</p>
-          <p><b>Next Node:</b> {selectedEdge.nextNode}</p>
-          <button onClick={() => setSelectedEdge(null)}>Close</button>
+          <h3>Device Details</h3>
+          <p>
+            <b>Name:</b> {selectedDevice.id}
+          </p>
+          <p>
+            <b>Description:</b> {selectedDevice.description || 'N/A'}
+          </p>
+          <p>
+            <b>Task:</b> {selectedDevice.task || 'N/A'}
+          </p>
+          <p>
+            <b>Priority:</b> {selectedDevice.prio || selectedDevice.priority || 'N/A'}
+          </p>
+          <p>
+            <b>Current Location:</b> {selectedDevice.location}
+          </p>
+          <button
+            onClick={() => setSelectedDevice(null)}
+            style={{ marginTop: 10, background: '#eee', borderRadius: 5, border: '1px solid #ccc', padding: '5px 14px', cursor: 'pointer' }}
+          >
+            Close
+          </button>
         </div>
       )}
     </div>

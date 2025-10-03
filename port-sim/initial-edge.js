@@ -90,7 +90,7 @@ function getRealisticTask(roles) {
   };
   const role = roles[0] || 'idle';
   const tasks = possibleTasks[role] || ['idle'];
-  return tasks[Math.floor(Math.random() * tasks.length)];
+  return 'idle';
 }
 
 // Generate initial edges
@@ -106,14 +106,14 @@ const initialEdges = devices.map(device => {
     roles: device.roles,
     type,
     currentLocation: pathObj.startNode,
-    task,
+    task: 'idle',
     priority,
-    nextNode: pathObj.next,        // string "null" instead of null
-    finalNode: pathObj.final,      // string "null" instead of null
+    nextNode: 'Null',        // string "null" instead of null
+    finalNode: 'None',      // string "null" instead of null
     startNode: pathObj.startNode,
-    path: pathObj.path,
+    path: [],
     taskPhase: 'idle',
-    eta,
+    eta:'Waiting',
     taskCompletionTime: 0,
     journeyTime: 0
   };

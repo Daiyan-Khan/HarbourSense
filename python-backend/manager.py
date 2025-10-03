@@ -5,12 +5,11 @@ import time
 from motor.motor_asyncio import AsyncIOMotorClient
 import paho.mqtt.client as mqtt
 from task_assigner import TaskAssigner
-from route_planner import RoutePlanner
 from datetime import datetime
 import heapq
 from math import inf
 import string
-
+from traffic_analyzer import SmartRoutePlanner, analyze_traffic  # Import the class and function
 # ------------------- Logging Setup -------------------
 logger = logging.getLogger("HarbourSenseManager")
 logging.getLogger("pymongo").setLevel(logging.WARNING)
@@ -65,9 +64,9 @@ class SmartRoutePlanner:
         if node in self.blocked:
             return []
         return [
-            (k, v)
-            for k, v in self.graph["nodes"].get(node, {}).get("neighbors", {}).items()
-            if k not in self.blocked
+            (neighbor, 1)  # Assume weight 1
+            for neighbor in self.graph.get(node, {}).get("neighbors", {}).values()
+            if neighbor not in self.blocked
         ]
 
     def compute_path(
@@ -79,9 +78,14 @@ class SmartRoutePlanner:
         predicted_loads,
         capacity_threshold=0.8,
     ):
-        distances = {node: inf for node in self.graph["nodes"]}
+        if start == end:
+            return [start]
+        if start not in self.graph or end not in self.graph:
+            logger.warning(f"Graph missing start/end nodes: {start} to {end}")
+            return None
+        distances = {node: inf for node in self.graph}
         distances[start] = 0
-        previous = {node: None for node in self.graph["nodes"]}
+        previous = {node: None for node in self.graph}
         pq = [(0, start)]
 
         while pq:
@@ -90,9 +94,7 @@ class SmartRoutePlanner:
                 continue
             neighbors = self.get_neighbors(current)
             for neighbor, weight in neighbors:
-                route_key = (
-                    f"{current.replace('-', '--')}-{neighbor.replace('-', '--')}"
-                )
+                route_key = f"{current.replace('-', '--')}-{neighbor.replace('-', '--')}"
                 start_coords = node_to_coords(current)
                 neigh_coords = node_to_coords(neighbor)
                 grid_penalty = (
@@ -101,15 +103,11 @@ class SmartRoutePlanner:
                     if start_coords and neigh_coords
                     else 0
                 )
-                congestion_ratio = route_congestion.get(route_key, {"ratio": 0})[
-                    "ratio"
-                ]
+                congestion_ratio = route_congestion.get(route_key, {"ratio": 0})["ratio"]
                 current_load = node_loads.get(neighbor, 0)
                 predicted_load = predicted_loads.get(neighbor, 0)
                 load_factor = (current_load + predicted_load) / capacity_threshold
-                adjusted_weight = (
-                    weight * (1 + congestion_ratio + load_factor) + grid_penalty
-                )
+                adjusted_weight = weight * (1 + congestion_ratio + load_factor) + grid_penalty
                 alt = dist + adjusted_weight
                 if alt < distances[neighbor]:
                     distances[neighbor] = alt
@@ -125,83 +123,89 @@ class SmartRoutePlanner:
         return path if path and path[0] == start else None
 
 # ------------------- Traffic Analyzer -------------------
-# Assuming route_capacities is defined or fetched; here's a placeholder
-route_capacities = {}  # e.g., fetch from DB or define as dict
-
+# Assuming route_capacities is fetched or defined
 async def analyze_traffic(db):
+    graph_doc = await db.graph.find_one()
+    raw_nodes = graph_doc.get('nodes', []) if graph_doc else []
+    graph = {node['id']: node for node in raw_nodes if 'id' in node}
+    logger.debug(f"Loaded {len(graph)} graph nodes for analysis: {list(graph.keys())}")
+
+    if not graph:
+        logger.error("No nodes loaded for traffic analysis - Skipping")
+        return {}
+
+    route_caps_doc = await db.routeCapacities.find_one()
+    route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
+
+    anomalies = [doc async for doc in db.sensorAlerts.find({'alert': True})]
+    blocked_nodes = [a['node'] for a in anomalies if a['severity'] == 'high']  # Example blocking
+
     edges = [doc async for doc in db.edgeDevices.find()]
+
     route_load = {}
     node_loads = {}
     predicted_loads = {}
     for edge in edges:
-        if edge is None or not isinstance(edge, dict):
-            logging.warning("Skipping invalid/None edge in analysis")
+        if not isinstance(edge, dict):
+            logger.warning("Skipping invalid edge in analysis")
             continue
-        current_loc = edge.get('currentLocation', 'na').replace('-', '--')  # Safe default
-        next_node_val = edge.get('nextNode', "Null")  # Use string placeholder
-        if next_node_val == "Null":
-            logging.info(f"Skipping edge {edge.get('id', 'unknown')} - nextNode is 'Null' (mid-task or idle reset)")
+        if edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
             continue
-        next_node = next_node_val.replace('-', '--')  # Now safe
-        # Rest of load calcs
+        current_loc = edge.get('currentLocation', 'na').replace('-', '--')
+        next_node = edge.get('nextNode', "Null").replace('-', '--')
+        if next_node == "Null":
+            continue
         route_key = f"{current_loc}-{next_node}"
         route_load[route_key] = route_load.get(route_key, 0) + 1
         node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
 
-        if "eta" in edge and next_node and edge.get('eta') != "N/A":
+        if 'eta' in edge and edge['eta'] != "N/A" and next_node != "Null":
             predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1
-        if "finalNode" in edge and edge.get('finalNode') != "None" and "journeyTime" in edge and edge.get('journeyTime') != "N/A" and edge["journeyTime"] < 60:
-            final_node = edge["finalNode"].replace("-", "--")
+        if 'finalNode' in edge and edge['finalNode'] != "None" and 'journeyTime' in edge and edge['journeyTime'] != "N/A" and edge['journeyTime'] < 60:
+            final_node = edge['finalNode'].replace('-', '--')
             predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
 
     route_congestion = {}
     for route_key, load in route_load.items():
         capacity = route_capacities.get(route_key, 3)
-        ratio = load / capacity if capacity else 0
-        level = "low" if ratio < 0.5 else "medium" if ratio < 0.8 else "high"
-        route_congestion[route_key] = {"ratio": ratio, "level": level}
+        ratio = load / capacity if capacity > 0 else 0
+        level = 'low' if ratio < 0.5 else 'medium' if ratio < 0.8 else 'high'
+        route_congestion[route_key] = {'ratio': ratio, 'level': level}
 
     node_congestion = {}
     for node, load in node_loads.items():
-        capacity = graph.get(node, {}).get("capacity", 5)
-        ratio = load / capacity if capacity else 0
-        level = "high" if ratio > 0.8 else "low"
-        node_congestion[node] = {"ratio": ratio, "level": level}
+        capacity = graph.get(node, {}).get('capacity', 5)
+        ratio = load / capacity if capacity > 0 else 0
+        level = 'high' if ratio > 0.8 else 'low'
+        node_congestion[node] = {'ratio': ratio, 'level': level}
 
     suggestions = []
     route_planner = SmartRoutePlanner(graph, blocked_nodes)
     for edge in edges:
-        current_node = edge["currentLocation"].replace("-", "--")
-        destination_val = edge.get("finalNode", "None")
-        if destination_val == "None":
-            destination = current_node.replace("-", "--")  # Default to current if "None"
-        else:
-            destination = destination_val.replace("-", "--")
+        if not isinstance(edge, dict) or edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
+            continue
+        current_node = edge.get('currentLocation', 'na').replace('-', '--')
+        destination_val = edge.get('finalNode', "None")
+        destination = current_node if destination_val == "None" else destination_val.replace('-', '--')
         suggested_path = route_planner.compute_path(
-            current_node,
-            destination,
-            node_loads,
-            route_congestion,
-            predicted_loads,
+            current_node, destination, node_loads, route_congestion, predicted_loads
         )
-        suggestions.append({"edgeId": edge["id"], "suggestedPath": suggested_path})
+        suggestions.append({'edgeId': edge.get('id', 'unknown'), 'suggestedPath': suggested_path})
 
-    await db.trafficData.insert_one(
-        {
-            "timestamp": datetime.utcnow(),
-            "routeLoad": route_load,
-            "nodeTraffic": node_loads,
-            "routeCongestion": route_congestion,
-            "nodeCongestion": node_congestion,
-            "suggestions": suggestions,
-        }
-    )
+    await db.trafficData.insert_one({
+        'timestamp': datetime.utcnow(),
+        'routeLoad': route_load,
+        'nodeTraffic': node_loads,
+        'routeCongestion': route_congestion,
+        'nodeCongestion': node_congestion,
+        'suggestions': suggestions
+    })
 
     return {
-        "route_congestion": route_congestion,
-        "node_loads": node_loads,
-        "predicted_loads": predicted_loads,
-        "suggestions": suggestions,
+        'route_congestion': route_congestion,
+        'node_loads': node_loads,
+        'predicted_loads': predicted_loads,
+        'suggestions': suggestions
     }
 
 # ------------------- Shipment Watcher -------------------
@@ -215,6 +219,12 @@ async def shipment_watcher(db, shipment_manager):
             await shipment_manager.process_shipment_steps(shipment)
 
         await asyncio.sleep(5)  # check every 5s
+
+# ------------------- Periodic Traffic Analysis -------------------
+async def periodic_traffic_analysis(db):
+    while True:
+        await analyze_traffic(db)
+        await asyncio.sleep(30)  # Every 30 seconds
 
 # ------------------- Setup Entry -------------------
 async def setup():
@@ -237,13 +247,25 @@ async def setup():
     mqtt_client.loop_start()
     logger.info("MQTT client connected to AWS IoT Core and loop started")
 
-    graph = await db.graph.find_one()
-    if not graph:
-        logger.error("Graph data missing from DB - cannot proceed")
+    raw_nodes = await db.graph.find().to_list(None)  # Loads all node documents
+    if not raw_nodes:
+        logger.error("Graph missing or empty in DB - cannot proceed")
         return
 
+    graph = {}
+    for node in raw_nodes:
+        node_id = node.get('id')
+        if node_id:
+            # Optional: Handle any BSON conversions if needed (usually not, as Motor handles it)
+            if isinstance(node.get('capacity'), dict) and '$numberInt' in node['capacity']:
+                node['capacity'] = int(node['capacity']['$numberInt'])
+            graph[node_id] = node
+        else:
+            logger.warning(f"Skipping invalid node without 'id': {node}")
+
+    logger.info(f"Loaded graph with {len(graph)} nodes")
     task_assigner = TaskAssigner(db, mqtt_client, graph)
-    route_planner = RoutePlanner(graph)
+    route_planner = SmartRoutePlanner(graph)
 
     # Define ShipmentManager inline here
     class ShipmentManager:
@@ -272,21 +294,13 @@ async def setup():
     shipment_manager = ShipmentManager(db, task_assigner)
 
     loop.create_task(shipment_watcher(db, shipment_manager))
+    loop.create_task(periodic_traffic_analysis(db))
 
     logger.info("Manager setup completed, entering monitoring loop...")
 
-    # Gather all background tasks (anomalies, analyzer, etc.)
     await asyncio.gather(
         task_assigner.monitor_and_assign(),
-        # Add traffic analysis if needed, e.g.:
-        # loop.create_task(periodic_traffic_analysis(db))
     )
-
-# Example periodic traffic analysis task (if needed)
-async def periodic_traffic_analysis(db):
-    while True:
-        await analyze_traffic(db)
-        await asyncio.sleep(30)  # Every 30 seconds
 
 if __name__ == "__main__":
     asyncio.run(setup())

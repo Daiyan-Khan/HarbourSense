@@ -266,7 +266,7 @@ class TaskAssigner:
             return
         await self.db.edgeDevices.update_one(
             {'id': device_id},
-            {'$set': {'nextNode': "Null", 'finalNode': "None", 'task': 'idle', 'taskPhase': 'idle', 'eta': "N/A", 'taskCompletionTime': "N/A", 'journeyTime': "N/A"}}
+            {'$set': {'nextNode': "Null", 'finalNode': "Null", 'task': 'idle', 'taskPhase': 'idle', 'eta': "N/A", 'taskCompletionTime': "N/A", 'journeyTime': "N/A"}}
         )
         logging.info(f"Reset {device_id} to idle with string placeholders - ready for reassignment")
         # Re-trigger assignment if shipments pending

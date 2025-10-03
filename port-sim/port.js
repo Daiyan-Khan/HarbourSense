@@ -71,6 +71,37 @@ async function updateEdgeState(db, edgeId, updates) {
   return edgeAfter;
 }
 
+
+// New: Function to handle task execution with timer
+async function executeTask(edgeId, db, device, durationSeconds) {
+  console.log(`Starting task execution for ${edgeId} with duration ${durationSeconds}s`);
+  await updateEdgeState(db, edgeId, { taskCompletionTime: durationSeconds, taskRemaining: durationSeconds });
+
+  // Countdown in seconds
+  for (let remaining = durationSeconds; remaining > 0; remaining--) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await updateEdgeState(db, edgeId, { taskRemaining: remaining });
+    // Publish progress update
+    device.publish(`harboursense/edge/${edgeId}/progress`, JSON.stringify({ id: edgeId, remaining }));
+  }
+
+  // Task complete: Reset to idle and notify
+  const updatedEdge = await updateEdgeState(db, edgeId, { 
+    taskPhase: 'idle', 
+    task: 'idle', 
+    nextNode: 'Null', 
+    finalNode: 'None', 
+    startNode: 'None', 
+    path: [], 
+    eta: 'N/A', 
+    taskCompletionTime: 'N/A', 
+    taskRemaining: 0, 
+    journeyTime: 'N/A' 
+  });
+  device.publish(`harboursense/edge/${edgeId}/task_completed`, JSON.stringify({ id: edgeId, location: updatedEdge.currentLocation, task: updatedEdge.task }));
+  console.log(`Task completed for ${edgeId} at ${updatedEdge.currentLocation}`);
+}
+
 async function runPortSimulation() {
   const client = new MongoClient(uri);
   await client.connect();
@@ -162,9 +193,7 @@ async function edgeAutonomousLoop(edgeId, db, device) {
       // Arrived at startNode: Switch to 'executing' and simulate task (e.g., loading)
       const executionTime = Math.floor(Math.random() * 30) + 10;  // Mock loading time
       console.log(`✅ Edge ${edgeId} arrived at startNode ${edge.startNode} - Starting execution (Time: ${executionTime}s)`);
-      await updateEdgeState(db, edgeId, { taskPhase: 'executing', taskCompletionTime: executionTime });
-
-      await new Promise(resolve => setTimeout(resolve, executionTime * 1000));
+      await executeTask(edgeId, db, device, executionTime);
 
       // Execution complete: Switch to 'enroute_to_complete' and set nextNode from path
       const nextFromPath = edge.path.length > 1 ? edge.path[1] : edge.finalNode;

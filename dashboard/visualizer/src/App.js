@@ -100,6 +100,79 @@ const mapDevicesToNodes = (devices, nodePositions) =>
     };
   });
 
+// New: Device Status Item Component with Countdown Timer
+function DeviceStatusItem({ device }) {
+  const [remainingTime, setRemainingTime] = useState(
+    device.taskCompletionTime && device.taskCompletionTime !== 'N/A' ? parseInt(device.taskCompletionTime, 10) : 0
+  );
+  const totalTime = device.taskCompletionTime && device.taskCompletionTime !== 'N/A' ? parseInt(device.taskCompletionTime, 10) : 0;
+
+  useEffect(() => {
+    let interval;
+    if (device.taskPhase === 'executing' && remainingTime > 0) {
+      interval = setInterval(() => {
+        setRemainingTime((prev) => Math.max(prev - 1, 0));
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [device.taskPhase, remainingTime]);
+
+  const isTraveling = (device.taskPhase === 'enroute_to_start' || device.taskPhase === 'enroute_to_complete') && device.nextNode && device.nextNode !== 'Null';
+  const isExecuting = device.taskPhase === 'executing';
+
+  return (
+    <div style={{
+      minWidth: '150px',
+      padding: '10px',
+      background: '#f0f0f0',
+      borderRadius: '8px',
+      margin: '0 10px',
+      textAlign: 'center',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+    }}>
+      <strong>{device.id}</strong>
+      <p>Task: {device.task || 'N/A'}</p>
+      <p>Phase: {device.taskPhase || 'N/A'}</p>
+      {isTraveling && (
+        <>
+          <p>Next: {device.nextNode || 'N/A'}</p>
+          <p>Final: {device.finalNode || 'N/A'}</p>
+          <p>ETA: {device.eta || 'N/A'}s</p>
+        </>
+      )}
+      {isExecuting && (
+        <p>Time Left: {remainingTime}s / {totalTime}s</p>
+      )}
+    </div>
+  );
+}
+
+// New: Horizontal Scrollable Sidebar Component
+function DeviceStatusSidebar({ devices }) {
+  return (
+    <div style={{
+      position: 'fixed',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      height: '150px',
+      overflowX: 'auto',
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'center',
+      background: '#ffffff',
+      borderTop: '1px solid #ddd',
+      padding: '10px',
+      zIndex: 10,
+      whiteSpace: 'nowrap',
+    }}>
+      {devices.map((device) => (
+        <DeviceStatusItem key={device.id} device={device} />
+      ))}
+    </div>
+  );
+}
+
 function App() {
   const [graphNodes, setGraphNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -273,6 +346,9 @@ function App() {
         <Background />
         <Controls />
       </ReactFlow>
+
+      {/* New: Add the sidebar here */}
+      <DeviceStatusSidebar devices={liveEdges} />
 
       {/* Sensor popup */}
       {showSensorMenu && (

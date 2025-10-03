@@ -119,7 +119,6 @@ async def analyze_traffic(db):
         current_loc = edge.get('currentLocation', 'na').replace('-', '--')
         next_node = edge.get('nextNode', "Null").replace('-', '--')
         if next_node == "Null":
-            logger.info(f"Skipping edge {edge.get('id')} with 'Null' nextNode")
             continue
         route_key = f"{current_loc}-{next_node}"
         route_load[route_key] = route_load.get(route_key, 0) + 1

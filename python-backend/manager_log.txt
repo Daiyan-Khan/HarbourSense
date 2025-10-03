@@ -8,3 +8,122 @@
 2025-10-03 23:43:24,323 - INFO - Loaded graph with 25 nodes
 2025-10-03 23:43:24,323 - INFO - Setup complete, monitoring...
 2025-10-03 23:43:24,528 - INFO - Processed shipment shipment_1
+2025-10-03 23:56:53,510 - INFO - Connected to MongoDB
+2025-10-03 23:56:54,036 - INFO - MQTT connected
+2025-10-03 23:56:55,105 - INFO - Loaded graph with 25 nodes
+2025-10-03 23:56:55,105 - INFO - Setup complete, monitoring...
+2025-10-03 23:57:26,784 - INFO - Connected to MongoDB
+2025-10-03 23:57:27,257 - INFO - MQTT connected
+2025-10-03 23:57:27,804 - INFO - Loaded graph with 25 nodes
+2025-10-03 23:57:27,805 - INFO - Setup complete, monitoring...
+2025-10-03 23:57:28,008 - INFO - Processed shipment shipment_2
+2025-10-03 23:58:19,352 - INFO - Connected to MongoDB
+2025-10-03 23:58:19,819 - INFO - MQTT connected
+2025-10-03 23:58:20,338 - INFO - Loaded graph with 25 nodes
+2025-10-03 23:58:20,339 - INFO - Setup complete, monitoring...
+2025-10-03 23:58:53,944 - INFO - Processed shipment shipment_1
+2025-10-04 00:02:59,177 - INFO - Connected to MongoDB
+2025-10-04 00:02:59,980 - INFO - MQTT connected
+2025-10-04 00:03:00,914 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:03:00,914 - INFO - Setup complete, monitoring...
+2025-10-04 00:16:29,560 - INFO - Connected to MongoDB
+2025-10-04 00:16:30,347 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:16:31,028 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:16:31,028 - INFO - Setup complete, monitoring...
+2025-10-04 00:16:31,272 - INFO - Processed shipment shipment_2
+2025-10-04 00:17:46,456 - INFO - Connected to MongoDB
+2025-10-04 00:17:46,957 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:17:47,558 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:17:47,558 - INFO - Setup complete, monitoring...
+2025-10-04 00:18:29,199 - INFO - Connected to MongoDB
+2025-10-04 00:18:29,673 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:18:30,488 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:18:30,488 - INFO - Setup complete, monitoring...
+2025-10-04 00:18:54,529 - INFO - Processed shipment shipment_14
+2025-10-04 00:23:57,741 - INFO - Processed shipment shipment_3
+2025-10-04 00:30:12,272 - INFO - Connected to MongoDB
+2025-10-04 00:30:12,834 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:30:13,372 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:30:13,372 - INFO - Setup complete, monitoring...
+2025-10-04 00:30:26,837 - INFO - Processed shipment shipment_2
+2025-10-04 00:30:28,588 - INFO - Processed shipment shipment_25
+2025-10-04 00:38:14,071 - INFO - Connected to MongoDB
+2025-10-04 00:38:14,690 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:38:15,238 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:38:15,238 - INFO - Setup complete, monitoring...
+2025-10-04 00:42:59,867 - INFO - Processed shipment shipment_41
+2025-10-04 00:46:20,602 - INFO - Connected to MongoDB
+2025-10-04 00:46:21,129 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:46:21,644 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:46:21,644 - INFO - Setup complete, monitoring...
+2025-10-04 00:46:37,406 - INFO - Connected to MongoDB
+2025-10-04 00:46:37,918 - INFO - MQTT connected and subscribed to updates
+2025-10-04 00:46:38,463 - INFO - Loaded graph with 25 nodes
+2025-10-04 00:46:38,463 - INFO - Setup complete, monitoring...
+2025-10-04 00:46:38,707 - INFO - Processed shipment shipment_1
+2025-10-04 00:48:53,652 - INFO - Processed shipment shipment_4
+2025-10-04 00:50:37,559 - INFO - Processed shipment shipment_2
+2025-10-04 00:51:17,340 - INFO - Processed shipment shipment_2
+2025-10-04 00:52:43,870 - INFO - Processed shipment shipment_3
+2025-10-04 01:00:28,243 - INFO - Connected to MongoDB
+2025-10-04 01:00:29,005 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:01:10,114 - INFO - Connected to MongoDB
+2025-10-04 01:01:10,612 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:01:11,285 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:01:11,285 - INFO - Setup complete, monitoring...
+2025-10-04 01:02:55,169 - INFO - Connected to MongoDB
+2025-10-04 01:02:55,742 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:02:56,356 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:02:56,356 - INFO - Setup complete, monitoring...
+2025-10-04 01:10:01,724 - INFO - Connected to MongoDB
+2025-10-04 01:10:02,339 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:10:03,098 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:10:03,098 - INFO - Setup complete, monitoring...
+2025-10-04 01:15:56,966 - INFO - Connected to MongoDB
+2025-10-04 01:15:57,769 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:15:58,549 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:15:58,549 - INFO - Setup complete, monitoring...
+2025-10-04 01:17:16,695 - INFO - Connected to MongoDB
+2025-10-04 01:17:17,296 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:17:17,869 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:17:17,869 - INFO - Setup complete, monitoring...
+2025-10-04 01:17:37,768 - INFO - Connected to MongoDB
+2025-10-04 01:17:38,335 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:17:39,172 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:17:39,172 - INFO - Setup complete, monitoring...
+2025-10-04 01:17:39,503 - INFO - Processed shipment shipment_4
+2025-10-04 01:29:02,680 - INFO - Connected to MongoDB
+2025-10-04 01:29:31,630 - INFO - Connected to MongoDB
+2025-10-04 01:33:42,886 - INFO - Connected to MongoDB
+2025-10-04 01:36:25,822 - INFO - Connected to MongoDB
+2025-10-04 01:38:05,689 - INFO - Connected to MongoDB
+2025-10-04 01:38:48,951 - INFO - Connected to MongoDB
+2025-10-04 01:38:49,523 - INFO - MQTT connected and subscribed to updates
+2025-10-04 01:38:50,031 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:38:50,031 - INFO - Setup complete, monitoring...
+2025-10-04 01:38:56,193 - INFO - Processed shipment shipment_1
+2025-10-04 01:40:40,547 - INFO - Processed shipment shipment_18
+2025-10-04 01:40:52,520 - INFO - Connected to MongoDB
+2025-10-04 01:43:08,698 - INFO - Connected to MongoDB
+2025-10-04 01:43:10,019 - INFO - Async MQTT client initialized and connected
+2025-10-04 01:43:10,789 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:43:10,792 - INFO - Setup complete, monitoring...
+2025-10-04 01:43:32,293 - INFO - Processed shipment shipment_1
+2025-10-04 01:48:30,109 - INFO - Processed shipment shipment_28
+2025-10-04 01:50:47,845 - INFO - Connected to MongoDB
+2025-10-04 01:50:49,103 - INFO - Async MQTT client initialized and connected
+2025-10-04 01:50:50,343 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:50:50,343 - INFO - Setup complete, monitoring...
+2025-10-04 01:50:50,619 - INFO - Manager subscribed to MQTT topic filter: harboursense/edge/+/update
+2025-10-04 01:55:44,021 - INFO - Connected to MongoDB
+2025-10-04 01:55:45,262 - INFO - Async MQTT client initialized and connected
+2025-10-04 01:55:45,740 - INFO - Loaded graph with 25 nodes
+2025-10-04 01:55:45,740 - INFO - Setup complete, monitoring...
+2025-10-04 01:55:46,029 - INFO - Manager subscribed to MQTT topic filter: harboursense/edge/+/update
+2025-10-04 01:55:55,709 - INFO - Processed shipment shipment_7
+2025-10-04 01:55:58,379 - DEBUG - MQTT message received on topic=harboursense/edge/truck001/update, raw={"id":"truck001","currentLocation":"E5-D5","nextNode":"D5","finalNode":"B4","taskPhase":"assigned","eta":10,"taskCompletionTime":0,"journeyTime":10}
+2025-10-04 01:55:58,380 - DEBUG - Received payload for truck001: {"id": "truck001", "currentLocation": "E5-D5", "nextNode": "D5", "finalNode": "B4", "taskPhase": "assigned", "eta": 10, "taskCompletionTime": 0, "journeyTime": 10}
+2025-10-04 01:56:08,544 - DEBUG - MQTT message received on topic=harboursense/edge/truck001/update, raw={"id":"truck001","currentLocation":"D5","taskPhase":"assigned","status":"arrived"}
+2025-10-04 01:56:08,545 - DEBUG - Received payload for truck001: {"id": "truck001", "currentLocation": "D5", "taskPhase": "assigned", "status": "arrived"}
+2025-10-04 01:56:08,545 - INFO - Arrival detected for truck001 at D5
+2025-10-04 01:56:08,545 - WARNING - No path info found for truck001 - possible assignment issue

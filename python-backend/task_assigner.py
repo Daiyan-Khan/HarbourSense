@@ -22,7 +22,6 @@ class TaskAssigner:
     async def assign_task(self, device_type, task_details):
         edges = await self.db.edgeDevices.find({'type': device_type, 'task': 'idle', 'taskPhase': 'idle'}).to_list(None)
         if not edges:
-            logger.warning(f"No idle {device_type} devices available")
             return False
 
         # Select closest (simplified - use real distance if available)

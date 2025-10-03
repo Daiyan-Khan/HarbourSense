@@ -71,7 +71,6 @@ async function updateEdgeState(db, edgeId, updates) {
   return edgeAfter;
 }
 
-
 // New: Function to handle task execution with timer
 async function executeTask(edgeId, db, device, durationSeconds) {
   console.log(`Starting task execution for ${edgeId} with duration ${durationSeconds}s`);
@@ -136,19 +135,18 @@ async function runPortSimulation() {
       console.log(`📥 Task received for edge ${edgeId}:`, taskData);
       console.log(`DEBUG: Parsed task data for ${edgeId}: ${JSON.stringify(taskData)}`);  // Added debug for parsed data
 
-      // Update with logging via helper
+      // Update with logging via helper (no full path stored here; manager handles)
       await updateEdgeState(db, edgeId, {
         task: taskData.task,
         nextNode: taskData.nextNode || "Null",
         finalNode: taskData.finalNode || taskData.nextNode || "None",
         startNode: taskData.startNode || "None",  // New: From manager
-        path: taskData.path || [],  // New: From manager
         taskPhase: taskData.taskPhase || 'enroute_to_start',  // New: From manager, default to start phase
         eta: taskData.eta || "N/A",
         taskCompletionTime: "N/A",
         journeyTime: taskData.journeyTime || "N/A"
       });
-      console.log(`DEBUG: Updated edge ${edgeId} in 'edgeDevices' with new task data including phase and path`);  // Added debug for DB update
+      console.log(`DEBUG: Updated edge ${edgeId} in 'edgeDevices' with new task data including phase`);
 
       console.log(`🔄 Edge ${edgeId} updated with new task from manager, starting movement simulation`);
       // No immediate simulateMovement here; loop will handle based on state
@@ -173,8 +171,8 @@ async function edgeAutonomousLoop(edgeId, db, device) {
     }
 
     // FIX: Auto-kickstart phase if task exists but phase is idle (prevents sticking without manager update)
-    if (edge.taskPhase === 'idle' && (edge.task !== 'idle' || (edge.nextNode && edge.nextNode !== "Null") || edge.path.length > 0)) {
-      console.log(`DEBUG: Auto-starting phase for ${edgeId} from 'idle' to 'enroute_to_start' (path/task present)`);
+    if (edge.taskPhase === 'idle' && (edge.task !== 'idle' || (edge.nextNode && edge.nextNode !== "Null"))) {
+      console.log(`DEBUG: Auto-starting phase for ${edgeId} from 'idle' to 'enroute_to_start' (task/nextNode present)`);
       await updateEdgeState(db, edgeId, { 
         taskPhase: 'enroute_to_start',
         task: edge.task || 'move'  // Ensure non-idle task
@@ -182,9 +180,9 @@ async function edgeAutonomousLoop(edgeId, db, device) {
       continue;  // Re-check in next loop iteration
     }
 
-    if (edge.taskPhase === 'idle' || !edge.nextNode || edge.nextNode === "Null") {
+    if (edge.taskPhase === 'idle' && (!edge.nextNode) || edge.nextNode === "Null"  ) {
       console.log(`DEBUG: Edge ${edgeId} in idle phase, awaiting task or nextNode from manager`);  // Wait for instruction
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, 5000));  // Wait 5s
       continue;
     }
 
@@ -195,30 +193,28 @@ async function edgeAutonomousLoop(edgeId, db, device) {
       console.log(`✅ Edge ${edgeId} arrived at startNode ${edge.startNode} - Starting execution (Time: ${executionTime}s)`);
       await executeTask(edgeId, db, device, executionTime);
 
-      // Execution complete: Switch to 'enroute_to_complete' and set nextNode from path
-      const nextFromPath = edge.path.length > 1 ? edge.path[1] : edge.finalNode;
-      await updateEdgeState(db, edgeId, { taskPhase: 'enroute_to_complete', nextNode: nextFromPath, taskCompletionTime: "N/A" });
-      console.log(`🔄 Edge ${edgeId} execution complete at startNode - Now enroute to complete`);
-      continue;  // Loop will handle movement
+      // Execution complete: Switch to 'enroute_to_complete' and wait for manager's next hop
+      await updateEdgeState(db, edgeId, { taskPhase: 'enroute_to_complete', nextNode: "Null" });
+      console.log(`🔄 Edge ${edgeId} execution complete at startNode - Awaiting next hop from manager for completion`);
+      continue;  // Loop will wait
     }
 
     if (edge.taskPhase === 'enroute_to_complete' && edge.currentLocation === edge.finalNode) {
-      // Arrived at finalNode: Complete task and set directly to 'idle' with string placeholders
+      // Arrived at finalNode: Complete task and set to 'idle'
       console.log(`✅ Edge ${edgeId} arrived at finalNode ${edge.finalNode} - Completing task and resetting to idle`);
       await updateEdgeState(db, edgeId, { 
         task: 'idle', 
-        taskPhase: 'idle',  // FIXED: Set to 'idle' instead of 'completed'
+        taskPhase: 'idle', 
         nextNode: "Null", 
         finalNode: "None", 
         startNode: "None", 
-        path: [], 
         eta: "N/A", 
         taskCompletionTime: "N/A", 
         journeyTime: "N/A" 
       });
 
-      // Publish completion with phase for manager to evaluate and assign new task
-      const completionPayload = { id: edgeId, currentLocation: edge.finalNode, taskPhase: 'idle', status: 'completed' };  // FIXED: Use 'idle' in payload
+      // Publish completion with phase for manager
+      const completionPayload = { id: edgeId, currentLocation: edge.finalNode, taskPhase: 'idle', status: 'completed' };
       device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(completionPayload));
       console.log(`DEBUG: Published task completion for ${edgeId} on topic: harboursense/edge/${edgeId}/update with phase`);
       console.log(`✅ Edge ${edgeId} completed task and is now idle, ready for new assignment from manager`);
@@ -230,64 +226,66 @@ async function edgeAutonomousLoop(edgeId, db, device) {
   }
 }
 
-// Improved simulateMovement with stationary logic, realistic ETA, and location validation
+// Improved simulateMovement for hop-by-hop: One segment only, reset nextNode on arrival
 async function simulateMovement(edgeId, db, device) {
-  const edgesCol = db.collection('edgeDevices');  // Use 'edgeDevices' consistently
+  const edgesCol = db.collection('edgeDevices');
   const historyCol = db.collection('edgeHistory');
   const edge = await edgesCol.findOne({ id: edgeId });
   if (!edge) return;
 
-  const currentLocation = sanitizeLocation(edge.currentLocation);
-  const nextNode = sanitizeLocation(edge.nextNode);
-  const finalNode = sanitizeLocation(edge.finalNode);
-  console.log(`DEBUG: Sanitized locations for ${edgeId}: Current: ${currentLocation}, Next: ${nextNode}, Final: ${finalNode}`);
+  let currentLocation = sanitizeLocation(edge.currentLocation);
+  let nextNode = sanitizeLocation(edge.nextNode);
+  let finalNode = sanitizeLocation(edge.finalNode);
+  let taskPhase = edge.taskPhase;
+  let status = edge.status || 'unknown';
 
-  // Stationary check: don't move, reset ETA/completion to placeholders
-  if (!nextNode || nextNode === "Null" || nextNode.toLowerCase() === "null" || edge.task === 'idle' || currentLocation === nextNode) {
-    await updateEdgeState(db, edgeId, {
-      eta: "Waiting",
-      taskCompletionTime: "N/A",
-      journeyTime: edge.journeyTime || "N/A"  // Preserve existing journeyTime
-    });
-    console.log(`DEBUG: Edge ${edgeId} is stationary (idle or no movement needed); staying at ${currentLocation}.`);
-    // NEW: Auto-advance if path remains and current == next
-    if (edge.path.length > 1 && currentLocation === nextNode) {
-      const newPath = [...new Set(edge.path.slice(1))];  // Advance and remove duplicates
-      const newNextNode = newPath[0] || finalNode;
-      await updateEdgeState(db, edgeId, { path: newPath, nextNode: newNextNode });
-      console.log(`DEBUG: Auto-advanced stalled path for ${edgeId} - New nextNode: ${newNextNode}`);
-      return;  // Re-loop to simulate
-    }
+  // Stationary check: Refactored to only trigger if nextNode null, status 'arrived', and NOT at final node
+  if (!nextNode || nextNode.toLowerCase() === 'null') {
+    if (status === 'arrived' && currentLocation !== finalNode) {
+      // Stationary: Waiting for next hop from manager (intermediate arrival)
+      await updateEdgeState(db, edgeId, { 
+  currentLocation: sanitizeLocation(nextNode), 
+  nextNode: "Null", 
+  journeyTime,
+  status: 'arrived'  // NEW: Persist in DB for stationary check
+});
 
-    // FIXED: Force reset to 'idle' for stuck enroute_to_complete with null nextNode
-    if (edge.taskPhase === 'enroute_to_complete' && (!nextNode || nextNode === "Null" || nextNode.toLowerCase() === "null")) {
-      console.log(`DEBUG: Forcing reset for stuck ${edgeId} in enroute_to_complete with null nextNode`);
+      console.log(`DEBUG: Edge ${edgeId} is stationary at intermediate node ${currentLocation} (arrived, waiting for next hop); staying put.`);
+
+      // Publish stationary update (only if not idle to avoid spam)
+      if (edge.task !== 'idle') {
+        const stationaryPayload = { id: edgeId, currentLocation, status: 'stationary', eta: "Waiting" };
+        device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(stationaryPayload));
+        await historyCol.insertOne({ ...stationaryPayload, timestamp: new Date() });
+        console.log(`DEBUG: Published stationary update for ${edgeId}`);
+      }
+      return;  // Exit to wait in loop
+    } else if (status === 'arrived' && currentLocation === finalNode && taskPhase === 'enroute_to_complete') {
+      // At final node: Force reset to idle (your existing logic, triggered only here)
+      console.log(`DEBUG: Forcing reset for ${edgeId} at final node ${currentLocation} in enroute_to_complete`);
       await updateEdgeState(db, edgeId, { 
         task: 'idle', 
-        taskPhase: 'idle',  // FIXED: Set to 'idle'
+        taskPhase: 'idle', 
         nextNode: "Null", 
         finalNode: "None", 
         startNode: "None", 
-        path: [], 
         eta: "N/A", 
         taskCompletionTime: "N/A", 
         journeyTime: "N/A" 
       });
 
       // Publish completion
-      const completionPayload = { id: edgeId, currentLocation, taskPhase: 'idle', status: 'completed' };  // FIXED: Use 'idle' in payload
+      const completionPayload = { id: edgeId, currentLocation, taskPhase: 'idle', status: 'completed' };
       device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(completionPayload));
       console.log(`DEBUG: Published forced completion for ${edgeId}`);
       return;
+    } else {
+      // Not arrived or other conditions: Log and skip stationary (allow potential movement if nextNode gets set)
+      console.log(`DEBUG: Skipping stationary for ${edgeId} (status: ${status}, location: ${currentLocation} vs final: ${finalNode})`);
     }
-
-    // Optionally publish a stationary update (but only if not already idle to avoid loop spam)
-    if (edge.task !== 'idle') {
-      const stationaryPayload = { id: edgeId, currentLocation, status: 'stationary', eta: "Waiting" };
-      device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(stationaryPayload));
-      await historyCol.insertOne({ ...stationaryPayload, timestamp: new Date() });
-    }
-    return;
+  } else {
+    // Valid nextNode: Proceed with movement
+    console.log(`DEBUG: Valid nextNode detected for ${edgeId}; continuing movement simulation`);
   }
 
   // Calculate distance (Manhattan on grid)
@@ -353,24 +351,23 @@ async function simulateMovement(edgeId, db, device) {
   // Wait for the ETA (use suggestedEta for timing)
   await new Promise(resolve => setTimeout(resolve, suggestedEta * 1000));
 
-  // Arrival
-  await updateEdgeState(db, edgeId, { currentLocation: sanitizeLocation(nextNode), journeyTime });
-  console.log(`DEBUG: Updated arrival location for ${edgeId} to ${sanitizeLocation(nextNode)}`);
+  // Arrival: Update location, reset nextNode to Null, update journeyTime
+  await updateEdgeState(db, edgeId, { currentLocation: sanitizeLocation(nextNode), nextNode: "Null", journeyTime });
+  console.log(`DEBUG: Updated arrival location for ${edgeId} to ${sanitizeLocation(nextNode)}, nextNode reset to Null`);
 
-  // After arrival, advance the path if not at finalNode
-  if (nextNode !== finalNode && edge.path.length > 1) {
-    const newPath = [...new Set(edge.path.slice(1))];  // Advance and remove duplicates
-    const newNextNode = newPath[0] || finalNode;
-    await updateEdgeState(db, edgeId, { path: newPath, nextNode: newNextNode });
-    console.log(`DEBUG: Advanced path for ${edgeId} - New nextNode: ${newNextNode}`);
-  }
-
-  const arrivalPayload = { id: edgeId, currentLocation: nextNode, taskPhase: edge.taskPhase, status: 'arrived' };  // Include phase
+  // Existing arrival publish (moved after checks for better flow)
+  const arrivalPayload = { id: edgeId, currentLocation: nextNode, taskPhase, status: 'arrived' };  
   device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(arrivalPayload));
   console.log(`DEBUG: Published arrival update for ${edgeId} on topic: harboursense/edge/${edgeId}/update with phase`);
   await historyCol.insertOne({ ...arrivalPayload, timestamp: new Date() });
   console.log(`DEBUG: Inserted arrival history for ${edgeId}`);
   console.log(`🎯 Edge ${edgeId} arrived at ${nextNode}`);
+
+  // Check if at final (phase-specific)
+  if (nextNode === finalNode && edge.taskPhase === 'enroute_to_complete') {
+    // Trigger task completion logic in loop
+    console.log(`DEBUG: At final node; loop will handle completion`);
+  }
 }
 
 async function generateShipmentsPeriodically(db) {

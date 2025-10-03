@@ -1,7 +1,7 @@
 // migrate-graph.js - Migrates graph.json to MongoDB 'port' database, 'graph' collection
 
 const { MongoClient } = require('mongodb');
-const graphData = require('./graph.json');  // Assumes graph.json is in the same directory
+const graphData = require('./test-graph.json');  // Assumes graph.json is in the same directory
 
 // MongoDB connection URI (replace with your actual URI if needed)
 const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net/port?retryWrites=true&w=majority';

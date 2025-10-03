@@ -1,25 +1,52 @@
 version: '3.8'
 services:
-  python-backend:
-    build: ./python-backend
-    environment:
-      - MONGO_URI=mongodb://mongo:27017  # If using a MongoDB container
-    depends_on:
-      - mongo  # Add if needed
-
-  port-sim:
-    build: ./port-sim
-    depends_on:
-      - python-backend  # Simulations depend on backend
-
-  dashboard:
-    build: ./dashboard
-    ports:
-      - "3000:3000"  # Expose dashboard UI
-    depends_on:
-      - python-backend
-
-  mongo:  # Optional MongoDB service
+  mongodb:
     image: mongo:latest
     ports:
       - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  mqtt:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_config:/mosquitto/config
+
+  backend:
+    build: ./python-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./python-backend:/app
+    depends_on:
+      - mongodb
+      - mqtt
+    command: /bin/bash -c "uvicorn main:app --host 0.0.0.0 --port 8000 & python manager.py"
+
+  portsim:
+    build: 
+      context: ./port-sim
+      dockerfile: Dockerfile 
+    depends_on:
+      - backend
+      - mqtt
+      - mongodb
+    volumes:
+      - ./port-sim:/app
+    command: node port.js
+
+  dashboard:
+    build: ./dashboard/visualizer
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
+  mosquitto_data:
+  mosquitto_config:

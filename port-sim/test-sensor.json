@@ -1,0 +1,12 @@
+[
+  {"id": "temp_A1_01", "type": "temperature", "node": "A1", "value": 25.5},
+  {"id": "humid_A1_01", "type": "humidity", "node": "A1", "value": 60},
+  {"id": "wind_A1_01", "type": "wind", "node": "A1", "value": 5.2},
+  {"id": "temp_B2_01", "type": "temperature", "node": "B2", "value": 24.8},
+  {"id": "humid_B2_01", "type": "humidity", "node": "B2", "value": 62},
+  {"id": "temp_C3_01", "type": "temperature", "node": "C3", "value": 26.1},
+  {"id": "wind_C3_01", "type": "wind", "node": "C3", "value": 4.8},
+  {"id": "humid_D4_01", "type": "humidity", "node": "D4", "value": 58},
+  {"id": "temp_E5_01", "type": "temperature", "node": "E5", "value": 23.9},
+  {"id": "wind_E5_01", "type": "wind", "node": "E5", "value": 3.5}
+]

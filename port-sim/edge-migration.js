@@ -10,19 +10,25 @@ async function migrateEdges() {
 
     const db = client.db('port');
     const edgeDevicesCol = db.collection('edgeDevices');
-    const edges = require('./edge.json');  // Load devices from edge.json
-    // Delete existing documents (optional)
+    const edges = require('./test-edge.json');  // Load devices from edge.json
+
+    // Delete existing documents (optional - comment out if you don't want to wipe data)
     const deleteResult = await edgeDevicesCol.deleteMany({});
     console.log(`Deleted ${deleteResult.deletedCount} existing documents.`);
 
-    // Your JSON array (paste the full list here)
+    // Initialize edges with additional required fields
+    const updatedEdges = edges.map(edge => ({
+      ...edge,
+      finalNode: edge.finalNode || edge.nextNode || edge.currentLocation || '',
+      currentLocation: edge.currentLocation || edge.nextNode || '',
+      task: edge.task || 'idle',
+      eta: edge.eta || 10,
+      taskCompletionTime: edge.taskCompletionTime || 0,
+      journeyTime: edge.journeyTime || 0
+    }));
 
-
-    // Clear existing data if you want a fresh start (optional)
-    // await edgeDevicesCol.deleteMany({});
-
-    // Insert the array
-    const insertResult = await edgeDevicesCol.insertMany(edges);
+    // Insert the updated array
+    const insertResult = await edgeDevicesCol.insertMany(updatedEdges);
     console.log(`Inserted ${insertResult.insertedCount} edge devices. IDs:`, insertResult.insertedIds);
   } catch (error) {
     console.error('Error:', error);

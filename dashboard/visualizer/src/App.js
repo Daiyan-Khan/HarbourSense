@@ -16,16 +16,19 @@ const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
 
 // Compute device position
 const computeDevicePosition = (device, nodePositions) => {
-  const loc = device.location;
+  if (!device || !device.currentLocation) return { x: 0, y: 0 };
 
-  // If en-route device (e.g., "A1-A2")
-  if (loc.includes('-')) {
-    const [startNode, endNode] = loc.split('-');
+  const loc = device.currentLocation;
+  if (typeof loc !== 'string' || loc.trim() === '') return { x: 0, y: 0 };
+
+  // En-route device (e.g., "A1->A2" or "A1-A2" - handle both for compatibility)
+  if (loc.includes('->') || loc.includes('-')) {
+    const separator = loc.includes('->') ? '->' : '-';
+    const [startNode, endNode] = loc.split(separator);
     const startPos = nodePositions[startNode];
     const endPos = nodePositions[endNode];
     if (!startPos || !endPos) return { x: 0, y: 0 };
 
-    // Place device **midway between two nodes**
     return {
       x: (startPos.x + NODE_WIDTH / 2 + endPos.x + NODE_WIDTH / 2) / 2 - DEVICE_SIZE / 2,
       y: (startPos.y + NODE_HEIGHT / 2 + endPos.y + NODE_HEIGHT / 2) / 2 - DEVICE_SIZE / 2,
@@ -50,19 +53,32 @@ const mapDevicesToNodes = (devices, nodePositions) =>
     let background = '#ccc';
     let borderRadius = '50%';
 
-    if (d.type.toLowerCase().includes('truck')) {
+    const deviceType = (d.type || '').toLowerCase();
+
+    if (deviceType.includes('truck')) {
       label = '🚚';
       background = 'saddlebrown';
       borderRadius = '5px';
-    } else if (d.type.toLowerCase().includes('conveyor')) {
+    } else if (deviceType.includes('conveyor')) {
       label = '⬭';
       background = 'grey';
       borderRadius = '50% / 25%';
-    } else if (d.type.toLowerCase().includes('robot')) {
+    } else if (deviceType.includes('robot')) {
       label = '🤖';
       background = 'lightgreen';
       borderRadius = '50%';
+    } else if (deviceType.includes('agv')) {
+      label = '🚜';
+      background = 'orange';
+      borderRadius = '5px';
+    } else if (deviceType.includes('crane')) {
+      label = '🏗️';
+      background = 'steelblue';
+      borderRadius = '5px';
     }
+
+    // Devices without type get a warning icon
+    if (!d.type) label = '⚠️';
 
     return {
       id: `dev-${d.id}`,
@@ -95,7 +111,10 @@ function App() {
   const [selectedSensor, setSelectedSensor] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
 
+  // Configurable base URL and DB mode (toggle for test vs production)
   const BASE_URL = 'http://localhost:8000';
+  const USE_TEST_DB = true;  // Set to true for test_port DB, false for production 'port' DB
+  const DB_PARAM = USE_TEST_DB ? '?db=test_port' : '';
 
   const edgeTypes = useMemo(
     () => ({
@@ -129,18 +148,18 @@ function App() {
     return positions;
   };
 
-  // Fetch graph
+  // Fetch graph nodes (with DB param)
   useEffect(() => {
     const fetchGraph = async () => {
       try {
-        const res = await axios.get(`${BASE_URL}/api/graph`);
+        const res = await axios.get(`${BASE_URL}/api/graph${DB_PARAM}`);
         const rawNodes = Object.values(res.data.nodes || {});
         const pos = gridLayout(rawNodes);
         setPositions(pos);
 
         const gNodes = rawNodes.map((n) => ({
           id: n.id,
-          data: { label: `${n.id} (${n.type})` },
+          data: { label: `${n.id} (${n.type || 'unknown'})` },
           position: pos[n.id],
           style: {
             width: NODE_WIDTH,
@@ -156,9 +175,10 @@ function App() {
 
         const graphEdges = [];
         rawNodes.forEach((node) => {
-          Object.values(node.neighbors || {}).forEach((nbrId) => {
+          Object.entries(node.neighbors || {}).forEach(([nbrId, weight]) => {
             const srcPos = pos[node.id];
             const tgtPos = pos[nbrId];
+            if (!srcPos || !tgtPos) return;
 
             let sourceX, sourceY, targetX, targetY;
             if (srcPos.y === tgtPos.y) {
@@ -191,20 +211,21 @@ function App() {
         setGraphNodes(gNodes);
         setEdges(graphEdges);
       } catch (err) {
-        console.error(err);
+        console.error('Error fetching graph:', err);
       }
     };
     fetchGraph();
   }, []);
 
-  // Fetch live devices & sensors
+  // Fetch live devices & sensors (with DB param for edges; sensors if needed)
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
-        const edgesRes = await axios.get(`${BASE_URL}/api/edges`);
+        const edgesRes = await axios.get(`${BASE_URL}/api/edges${DB_PARAM}`);
+        console.log('Fetched edge data:', edgesRes.data); // Log raw fetched data
         setLiveEdges(edgesRes.data);
 
-        const sensorsRes = await axios.get(`${BASE_URL}/api/sensors`);
+        const sensorsRes = await axios.get(`${BASE_URL}/api/sensors${DB_PARAM}`);  // Add param if sensors also need test DB
         const uniqueSensors = Array.from(new Map(sensorsRes.data.map((s) => [s.id, s])).values());
         setSensors(uniqueSensors);
       } catch (error) {
@@ -215,6 +236,16 @@ function App() {
     const interval = setInterval(fetchLiveData, 3000);
     return () => clearInterval(interval);
   }, []);
+
+  // Log updates whenever liveEdges change
+  useEffect(() => {
+    if (liveEdges.length > 0) {
+      console.log('Edges updated:', {
+        count: liveEdges.length,
+        sample: liveEdges.slice(0, 3), // Log first 3 for brevity
+      });
+    }
+  }, [liveEdges]);
 
   const onNodeClick = (event, node) => {
     if (node.id.startsWith('dev-')) {
@@ -245,22 +276,12 @@ function App() {
 
       {/* Sensor popup */}
       {showSensorMenu && (
-        <div
-          style={{
-            position: 'fixed',
-            top: '20%',
-            left: '30%',
-            background: 'white',
-            padding: 20,
-            border: '1px solid #aaa',
-            borderRadius: 8,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.08)',
-            minWidth: 400,
-            maxHeight: '60vh',
-            overflowY: 'auto',
-            zIndex: 1000,
-          }}
-        >
+        <div style={{
+          position: 'fixed', top: '20%', left: '30%', background: 'white',
+          padding: 20, border: '1px solid #aaa', borderRadius: 8,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.08)', minWidth: 400,
+          maxHeight: '60vh', overflowY: 'auto', zIndex: 1000
+        }}>
           <h3>Sensors at Node</h3>
           <ul style={{ listStyle: 'none', padding: 0, marginBottom: 10 }}>
             {selectedNodeSensors.map((sensor) => (
@@ -278,26 +299,18 @@ function App() {
                   }}
                   onClick={() => setSelectedSensor(sensor)}
                 >
-                  {sensor.type} ({sensor.id})
+                  {sensor.type || 'unknown'} ({sensor.id})
                 </button>
               </li>
             ))}
           </ul>
-
-          <button
-            onClick={() => setShowSensorMenu(false)}
-            style={{ background: '#eee', borderRadius: 5, border: '1px solid #ccc', padding: '5px 14px', cursor: 'pointer' }}
-          >
-            Close
-          </button>
+          <button onClick={() => setShowSensorMenu(false)} style={{ marginTop: 5 }}>Close</button>
 
           {selectedSensor && (
             <div style={{ marginTop: 20, borderTop: '1px solid #ddd', paddingTop: 12 }}>
               <h4>Sensor Data</h4>
               {Object.entries(selectedSensor).map(([k, v]) => (
-                <p key={k}>
-                  <b>{k}:</b> {String(v)}
-                </p>
+                <p key={k}><b>{k}:</b> {String(v)}</p>
               ))}
             </div>
           )}
@@ -306,42 +319,23 @@ function App() {
 
       {/* Device popup */}
       {selectedDevice && (
-        <div
-          style={{
-            position: 'fixed',
-            top: '20%',
-            left: '35%',
-            background: 'white',
-            padding: 20,
-            border: '1px solid #aaa',
-            borderRadius: 8,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-            minWidth: 400,
-            zIndex: 2000,
-          }}
-        >
+        <div style={{
+          position: 'fixed', top: '20%', left: '35%', background: 'white',
+          padding: 20, border: '1px solid #aaa', borderRadius: 8,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.12)', minWidth: 400, zIndex: 2000
+        }}>
           <h3>Device Details</h3>
-          <p>
-            <b>Name:</b> {selectedDevice.id}
-          </p>
-          <p>
-            <b>Description:</b> {selectedDevice.description || 'N/A'}
-          </p>
-          <p>
-            <b>Task:</b> {selectedDevice.task || 'N/A'}
-          </p>
-          <p>
-            <b>Priority:</b> {selectedDevice.prio || selectedDevice.priority || 'N/A'}
-          </p>
-          <p>
-            <b>Current Location:</b> {selectedDevice.location}
-          </p>
-          <button
-            onClick={() => setSelectedDevice(null)}
-            style={{ marginTop: 10, background: '#eee', borderRadius: 5, border: '1px solid #ccc', padding: '5px 14px', cursor: 'pointer' }}
-          >
-            Close
-          </button>
+          <p><b>Name:</b> {selectedDevice.id}</p>
+          <p><b>Description:</b> {selectedDevice.desc || 'N/A'}</p>
+          <p><b>Task:</b> {selectedDevice.task || 'N/A'}</p>
+          <p><b>Priority:</b> {selectedDevice.prio || selectedDevice.priority || 'N/A'}</p>
+          <p><b>Current Location:</b> {selectedDevice.currentLocation || 'N/A'}</p>
+          <p><b>Next Node:</b> {selectedDevice.nextNode || 'N/A'}</p>
+          <p><b>Final Node:</b> {selectedDevice.finalNode || 'N/A'}</p>
+          <p><b>ETA:</b> {selectedDevice.eta ? `${selectedDevice.eta}s` : 'N/A'}</p>
+          <p><b>Task Completion Time:</b> {selectedDevice.taskCompletionTime ? `${selectedDevice.taskCompletionTime}s` : 'Not Started'}</p>
+          <p><b>Total Journey Time:</b> {selectedDevice.journeyTime ? `${selectedDevice.journeyTime}s` : 'N/A'}</p>
+          <button onClick={() => setSelectedDevice(null)} style={{ marginTop: 10 }}>Close</button>
         </div>
       )}
     </div>

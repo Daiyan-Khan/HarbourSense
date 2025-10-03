@@ -1,6 +1,16 @@
+# Dockerfile for Node.js Port Simulator
 FROM node:18-slim
+
 WORKDIR /app
-COPY . .
+
+# Install Node dependencies (assuming package.json in repo)
+COPY package*.json ./
 RUN npm install
-EXPOSE 8080  # Adjust if needed
-CMD ["sh", "-c", "node sensor.js & node port.js"]  # Run both in one container; split if preferred
+
+# Copy simulation code
+COPY . ./
+
+# Copy certs for AWS IoT
+COPY certs/ ./certs/
+
+CMD ["nodemon", "port.js"]  # Adjust to your main sim file, e.g., port_simulator.js

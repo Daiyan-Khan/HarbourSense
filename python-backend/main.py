@@ -79,7 +79,7 @@ async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
 
 @app.get("/api/edges")
 async def get_edges():
-    edges = [doc async for doc in db.edges.find()]
+    edges = [doc async for doc in db.edgeDevices.find()]
     return fix_mongo_ids(edges)  # Returns list of edges with id, currentLocation, task, speed, nextNode, etc.
 
 @app.get("/api/sensors")

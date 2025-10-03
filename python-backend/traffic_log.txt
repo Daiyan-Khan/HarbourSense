@@ -1,0 +1,42 @@
+2025-10-03 23:40:45,165 - INFO - Starting traffic analysis
+2025-10-03 23:40:45,548 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:40:45,549 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:40:45,549 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:40:45,549 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:40:45,624 - INFO - Traffic analysis completed
+2025-10-03 23:41:15,635 - INFO - Starting traffic analysis
+2025-10-03 23:41:15,819 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:41:15,819 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:41:15,822 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:41:15,822 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:41:15,865 - INFO - Traffic analysis completed
+2025-10-03 23:41:45,877 - INFO - Starting traffic analysis
+2025-10-03 23:41:46,018 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:41:46,021 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:41:46,021 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:41:46,022 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:41:46,062 - INFO - Traffic analysis completed
+2025-10-03 23:42:16,060 - INFO - Starting traffic analysis
+2025-10-03 23:42:16,205 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:42:16,207 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:42:16,207 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:42:16,207 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:42:16,246 - INFO - Traffic analysis completed
+2025-10-03 23:42:46,249 - INFO - Starting traffic analysis
+2025-10-03 23:42:46,388 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:42:46,388 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:42:46,388 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:42:46,388 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:42:46,430 - INFO - Traffic analysis completed
+2025-10-03 23:43:24,323 - INFO - Starting traffic analysis
+2025-10-03 23:43:24,642 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:43:24,642 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:43:24,642 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:43:24,642 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:43:24,677 - INFO - Traffic analysis completed
+2025-10-03 23:43:54,689 - INFO - Starting traffic analysis
+2025-10-03 23:43:54,818 - INFO - Skipping edge agv001 with 'Null' nextNode
+2025-10-03 23:43:54,818 - INFO - Skipping edge conveyor001 with 'Null' nextNode
+2025-10-03 23:43:54,820 - INFO - Skipping edge crane001 with 'Null' nextNode
+2025-10-03 23:43:54,820 - INFO - Skipping edge robot001 with 'Null' nextNode
+2025-10-03 23:43:54,862 - INFO - Traffic analysis completed

@@ -1,0 +1,10 @@
+2025-10-03 23:40:43,933 - INFO - Connected to MongoDB
+2025-10-03 23:40:44,656 - INFO - MQTT connected
+2025-10-03 23:40:45,165 - INFO - Loaded graph with 25 nodes
+2025-10-03 23:40:45,165 - INFO - Setup complete, monitoring...
+2025-10-03 23:40:45,355 - INFO - Processed shipment shipment_1
+2025-10-03 23:43:23,156 - INFO - Connected to MongoDB
+2025-10-03 23:43:23,698 - INFO - MQTT connected
+2025-10-03 23:43:24,323 - INFO - Loaded graph with 25 nodes
+2025-10-03 23:43:24,323 - INFO - Setup complete, monitoring...
+2025-10-03 23:43:24,528 - INFO - Processed shipment shipment_1

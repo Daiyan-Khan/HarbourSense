@@ -21,10 +21,9 @@ const computeDevicePosition = (device, nodePositions) => {
   const loc = device.currentLocation;
   if (typeof loc !== 'string' || loc.trim() === '') return { x: 0, y: 0 };
 
-  // En-route device (e.g., "A1->A2" or "A1-A2" - handle both for compatibility)
-  if (loc.includes('->') || loc.includes('-')) {
-    const separator = loc.includes('->') ? '->' : '-';
-    const [startNode, endNode] = loc.split(separator);
+  // En-route device (e.g., "A1->A2")
+  if (loc.includes('->')) {
+    const [startNode, endNode] = loc.split('->');
     const startPos = nodePositions[startNode];
     const endPos = nodePositions[endNode];
     if (!startPos || !endPos) return { x: 0, y: 0 };
@@ -67,14 +66,6 @@ const mapDevicesToNodes = (devices, nodePositions) =>
       label = '🤖';
       background = 'lightgreen';
       borderRadius = '50%';
-    } else if (deviceType.includes('agv')) {
-      label = '🚜';
-      background = 'orange';
-      borderRadius = '5px';
-    } else if (deviceType.includes('crane')) {
-      label = '🏗️';
-      background = 'steelblue';
-      borderRadius = '5px';
     }
 
     // Devices without type get a warning icon
@@ -100,79 +91,6 @@ const mapDevicesToNodes = (devices, nodePositions) =>
     };
   });
 
-// New: Device Status Item Component with Countdown Timer
-function DeviceStatusItem({ device }) {
-  const [remainingTime, setRemainingTime] = useState(
-    device.taskCompletionTime && device.taskCompletionTime !== 'N/A' ? parseInt(device.taskCompletionTime, 10) : 0
-  );
-  const totalTime = device.taskCompletionTime && device.taskCompletionTime !== 'N/A' ? parseInt(device.taskCompletionTime, 10) : 0;
-
-  useEffect(() => {
-    let interval;
-    if (device.taskPhase === 'executing' && remainingTime > 0) {
-      interval = setInterval(() => {
-        setRemainingTime((prev) => Math.max(prev - 1, 0));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [device.taskPhase, remainingTime]);
-
-  const isTraveling = (device.taskPhase === 'enroute_to_start' || device.taskPhase === 'enroute_to_complete') && device.nextNode && device.nextNode !== 'Null';
-  const isExecuting = device.taskPhase === 'executing';
-
-  return (
-    <div style={{
-      minWidth: '150px',
-      padding: '10px',
-      background: '#f0f0f0',
-      borderRadius: '8px',
-      margin: '0 10px',
-      textAlign: 'center',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-    }}>
-      <strong>{device.id}</strong>
-      <p>Task: {device.task || 'N/A'}</p>
-      <p>Phase: {device.taskPhase || 'N/A'}</p>
-      {isTraveling && (
-        <>
-          <p>Next: {device.nextNode || 'N/A'}</p>
-          <p>Final: {device.finalNode || 'N/A'}</p>
-          <p>ETA: {device.eta || 'N/A'}s</p>
-        </>
-      )}
-      {isExecuting && (
-        <p>Time Left: {remainingTime}s / {totalTime}s</p>
-      )}
-    </div>
-  );
-}
-
-// New: Horizontal Scrollable Sidebar Component
-function DeviceStatusSidebar({ devices }) {
-  return (
-    <div style={{
-      position: 'fixed',
-      bottom: 0,
-      left: 0,
-      right: 0,
-      height: '150px',
-      overflowX: 'auto',
-      display: 'flex',
-      flexDirection: 'row',
-      alignItems: 'center',
-      background: '#ffffff',
-      borderTop: '1px solid #ddd',
-      padding: '10px',
-      zIndex: 10,
-      whiteSpace: 'nowrap',
-    }}>
-      {devices.map((device) => (
-        <DeviceStatusItem key={device.id} device={device} />
-      ))}
-    </div>
-  );
-}
-
 function App() {
   const [graphNodes, setGraphNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -184,10 +102,7 @@ function App() {
   const [selectedSensor, setSelectedSensor] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
 
-  // Configurable base URL and DB mode (toggle for test vs production)
   const BASE_URL = 'http://localhost:8000';
-  const USE_TEST_DB = true;  // Set to true for test_port DB, false for production 'port' DB
-  const DB_PARAM = USE_TEST_DB ? '?db=test_port' : '';
 
   const edgeTypes = useMemo(
     () => ({
@@ -221,11 +136,11 @@ function App() {
     return positions;
   };
 
-  // Fetch graph nodes (with DB param)
+  // Fetch graph nodes
   useEffect(() => {
     const fetchGraph = async () => {
       try {
-        const res = await axios.get(`${BASE_URL}/api/graph${DB_PARAM}`);
+        const res = await axios.get(`${BASE_URL}/api/graph`);
         const rawNodes = Object.values(res.data.nodes || {});
         const pos = gridLayout(rawNodes);
         setPositions(pos);
@@ -248,7 +163,7 @@ function App() {
 
         const graphEdges = [];
         rawNodes.forEach((node) => {
-          Object.entries(node.neighbors || {}).forEach(([nbrId, weight]) => {
+          Object.values(node.neighbors || {}).forEach((nbrId) => {
             const srcPos = pos[node.id];
             const tgtPos = pos[nbrId];
             if (!srcPos || !tgtPos) return;
@@ -290,15 +205,15 @@ function App() {
     fetchGraph();
   }, []);
 
-  // Fetch live devices & sensors (with DB param for edges; sensors if needed)
+  // Fetch live devices & sensors
   useEffect(() => {
     const fetchLiveData = async () => {
       try {
-        const edgesRes = await axios.get(`${BASE_URL}/api/edges${DB_PARAM}`);
+        const edgesRes = await axios.get(`${BASE_URL}/api/edges`);
         console.log('Fetched edge data:', edgesRes.data); // Log raw fetched data
         setLiveEdges(edgesRes.data);
 
-        const sensorsRes = await axios.get(`${BASE_URL}/api/sensors${DB_PARAM}`);  // Add param if sensors also need test DB
+        const sensorsRes = await axios.get(`${BASE_URL}/api/sensors`);
         const uniqueSensors = Array.from(new Map(sensorsRes.data.map((s) => [s.id, s])).values());
         setSensors(uniqueSensors);
       } catch (error) {
@@ -346,9 +261,6 @@ function App() {
         <Background />
         <Controls />
       </ReactFlow>
-
-      {/* New: Add the sidebar here */}
-      <DeviceStatusSidebar devices={liveEdges} />
 
       {/* Sensor popup */}
       {showSensorMenu && (

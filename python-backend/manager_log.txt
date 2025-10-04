@@ -426,3 +426,36 @@
 2025-10-04 18:11:38,866 - INFO - TrafficAnalyzer listener started (dynamic)
 2025-10-04 18:11:39,081 - INFO - Initial traffic analysis complete
 2025-10-04 18:11:39,081 - INFO - Setup complete, monitoring...
+2025-10-04 18:12:12,728 - INFO - Connected to MongoDB
+2025-10-04 18:12:13,880 - INFO - Async MQTT client initialized and connected
+2025-10-04 18:12:14,415 - INFO - Loaded graph with 25 nodes
+2025-10-04 18:12:14,416 - INFO - TrafficAnalyzer listener started (dynamic)
+2025-10-04 18:12:14,628 - INFO - Initial traffic analysis complete
+2025-10-04 18:12:14,628 - INFO - Setup complete, monitoring...
+2025-10-04 18:12:15,109 - INFO - Processed shipment shipment_20
+2025-10-04 18:12:41,916 - INFO - Processed shipment shipment_1
+2025-10-04 18:12:43,027 - INFO - Processed shipment shipment_1
+2025-10-04 18:12:43,933 - INFO - Processed shipment shipment_2
+2025-10-04 18:13:07,078 - INFO - Processed shipment shipment_13
+2025-10-04 18:13:07,726 - INFO - Processed shipment shipment_24
+2025-10-04 18:13:08,067 - INFO - Processed shipment shipment_25
+2025-10-04 18:13:08,904 - INFO - Processed shipment shipment_40
+2025-10-04 18:13:10,490 - INFO - Processed shipment shipment_77
+2025-10-04 18:16:09,591 - INFO - Processed shipment shipment_7
+2025-10-04 18:16:18,264 - INFO - Processed shipment shipment_172
+2025-10-04 18:30:23,299 - INFO - Connected to MongoDB
+2025-10-04 18:30:24,588 - INFO - Async MQTT client initialized and connected
+2025-10-04 18:30:25,192 - INFO - Loaded graph with 25 nodes
+2025-10-04 18:30:25,193 - INFO - TrafficAnalyzer listener started (dynamic)
+2025-10-04 18:30:25,444 - INFO - Initial traffic analysis complete
+2025-10-04 18:30:25,444 - INFO - Setup complete, monitoring...
+2025-10-04 18:31:09,388 - INFO - Processed shipment shipment_19
+2025-10-04 18:31:10,118 - INFO - Processed shipment shipment_30
+2025-10-04 18:31:11,389 - INFO - Processed shipment shipment_11
+2025-10-04 18:45:43,533 - INFO - Connected to MongoDB
+2025-10-04 18:45:47,177 - INFO - Async MQTT client initialized and connected
+2025-10-04 18:45:47,721 - INFO - Loaded graph with 25 nodes
+2025-10-04 18:45:47,721 - INFO - TrafficAnalyzer listener started (dynamic)
+2025-10-04 18:45:47,942 - INFO - Initial traffic analysis complete
+2025-10-04 18:45:47,943 - INFO - Setup complete, monitoring...
+2025-10-04 18:45:48,622 - INFO - Processed shipment shipment_21

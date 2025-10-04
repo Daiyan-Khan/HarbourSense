@@ -37808,3 +37808,419 @@ Edge truck001 phase changed: en_route_start -> assigned
 Already at A1; discarding first path element and proceeding
 Edge truck001 starting movement (path from MQTT): A1 -> A2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
 Edge truck001 location changed: A1 -> A1-A2
+New shipment generated: shipment_1 at A1
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+Edge truck001 phase changed: en_route_start -> assigned
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Already at A1; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): A1 -> A2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: A1 -> A1-A2
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+Sanitized location for truck001: A2
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+Already at A2; discarding first path element and proceeding
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+Edge truck001 starting movement (path from MQTT): A2 -> A3 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: A2 -> A2-A3
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Sanitized location for truck001: A3
+Already at A3; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): A3 -> A4 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: A3 -> A3-A4
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Sanitized location for truck001: A4
+Already at A4; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): A4 -> B4 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: A4 -> A4-B4
+Edge truck001 location changed: A4 -> A4-B4
+Edge truck001 arrived at A2, discarded first path element, published remaining path (1 nodes left)
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+Edge truck001 location changed: A4-B4 -> A3
+Edge truck001 arrived at A3, discarded first path element, published remaining path (1 nodes left)
+Edge truck001 starting movement (path from MQTT): A3 -> B4 (Distance: 2 nodes, Speed: 10, ETA: 20s)
+Edge truck001 location changed: A3 -> A3-B4
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Sanitized location for truck001: B4
+Already at B4; discarding first path element and proceeding
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 phase changed: assigned -> completing
+Edge truck001 phase changed: completing -> assigned
+Edge truck001 location changed: B4 -> A4
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 phase changed: assigned -> completing
+Path emptied after arrival at A4 for truck001; phase shifted.
+Edge truck001 arrived at A4, discarded first path element, published remaining path (0 nodes left)
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+Starting task execution for truck001 with duration 10s
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+Starting task execution for truck001 with duration 10s
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Starting task execution for truck001 with duration 10s
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+Edge truck001 phase changed: completing -> assigned
+Edge truck001 location changed: A4 -> B4
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for truck001; phase shifted.
+Edge truck001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+Starting task execution for truck001 with duration 10s
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+Transitioning truck001 to IDLE; resetting attributes
+Edge truck001 task changed: transporting_shipment_unknown -> idle
+Edge truck001 phase changed: completing -> idle
+Task completed for truck001 at B4
+Transitioning truck001 to IDLE; resetting attributes
+Edge truck001 task changed: transporting_shipment_shipment_7 -> idle
+Edge truck001 phase changed: en_route_start -> idle
+Task completed for truck001 at A1
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Transitioning truck001 to IDLE; resetting attributes
+Edge truck001 task changed: transporting_shipment_shipment_10 -> idle
+Edge truck001 phase changed: en_route_start -> idle
+Task completed for truck001 at A1
+DEBUG: Edge truck001 idle - staying at A1, awaiting task.
+Edge truck001 phase changed: en_route_start -> assigned
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+Already at A1; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): A1 -> A2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: A1 -> A1-A2
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at C1, awaiting task.
+DEBUG: Edge agv001 idle - staying at A4, awaiting task.
+DEBUG: Edge robot001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at D2, awaiting task.
+Sanitized location for truck001: A2
+New shipment generated: shipment_1 at A1
+New shipment generated: shipment_1 at A1
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge truck001 idle - staying at D1, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at C5, awaiting task.
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge truck001 idle - staying at D1, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge agv001 idle - staying at C5, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge agv001 idle - staying at C5, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+Edge truck001 phase changed: en_route_start -> assigned
+Edge truck001 phase changed: en_route_start -> assigned
+Already at A1; discarding first path element and proceeding
+Already at A1; discarding first path element and proceeding
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Edge truck001 starting movement (path from MQTT): A1 -> B1 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+DEBUG: Edge agv001 idle - staying at C5, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+Edge truck001 starting movement (path from MQTT): A1 -> B1 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge truck001 location changed: A1 -> A1-B1
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Sanitized location for truck001: B1
+Edge agv001 phase changed: en_route_start -> assigned
+Already at A1; discarding first path element and proceeding
+Edge agv001 starting movement (path from MQTT): A1 -> B1 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Already at B1; discarding first path element and proceeding
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge truck001 starting movement (path from MQTT): B1 -> B2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge agv001 location changed: A1 -> A1-B1
+Edge truck001 location changed: B1 -> B1-B2
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Sanitized location for agv001: B1
+Sanitized location for truck001: B2
+Already at B1; discarding first path element and proceeding
+Already at B2; discarding first path element and proceeding
+Edge agv001 starting movement (path from MQTT): B1 -> B2 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Edge truck001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge agv001 location changed: B1 -> B1-B2
+Edge truck001 location changed: B2 -> B2-B3
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+Sanitized location for agv001: B2
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Already at B2; discarding first path element and proceeding
+Edge agv001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Edge agv001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge agv001 location changed: B2 -> B2-B3
+Edge agv001 location changed: B2 -> B2-B3
+Edge truck001 location changed: B2-B3 -> B1
+Edge truck001 location changed: B2-B3 -> B1
+Edge truck001 arrived at B1, discarded first path element, published remaining path (2 nodes left)
+Edge truck001 arrived at B1, discarded first path element, published remaining path (2 nodes left)
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge truck001 starting movement (path from MQTT): B1 -> B3 (Distance: 2 nodes, Speed: 10, ETA: 20s)
+Edge truck001 starting movement (path from MQTT): B1 -> B3 (Distance: 2 nodes, Speed: 10, ETA: 20s)
+Edge truck001 location changed: B1 -> B1-B3
+Edge truck001 location changed: B1 -> B1-B3
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Starting simulation for 5 edges...
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+Sanitized location for truck001: B3
+Sanitized location for agv001: B3
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge robot001 idle - staying at C5, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Already at B3; discarding first path element and proceeding
+Already at B3; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge agv001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Edge truck001 location changed: B3 -> B3-B4
+Edge agv001 location changed: B3 -> B3-B4
+Edge truck001 location changed: B3-B4 -> B2
+Edge truck001 arrived at B2, discarded first path element, published remaining path (1 nodes left)
+Edge truck001 location changed: B2 -> B3
+Edge truck001 arrived at B3, discarded first path element, published remaining path (1 nodes left)
+Edge truck001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: B3 -> B3-B4
+Edge agv001 location changed: B3-B4 -> B1
+Sanitized location for truck001: B4
+Edge agv001 location changed: B1 -> B2
+Already at B4; discarding first path element and proceeding
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge agv001 arrived at B2, discarded first path element, published remaining path (1 nodes left)
+Edge agv001 arrived at B1, discarded first path element, published remaining path (1 nodes left)
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Edge truck001 phase changed: assigned -> completing
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge robot001 phase changed: en_route_start -> assigned
+Already at A1; discarding first path element and proceeding
+Edge robot001 starting movement (path from MQTT): A1 -> B1 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Edge robot001 location changed: A1 -> A1-B1
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Sanitized location for robot001: B1
+Already at B1; discarding first path element and proceeding
+Edge robot001 starting movement (path from MQTT): B1 -> B2 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Edge robot001 location changed: B1 -> B1-B2
+Edge agv001 location changed: B2 -> B3
+Edge agv001 location changed: B2 -> B3
+Edge agv001 arrived at B3, discarded first path element, published remaining path (1 nodes left)
+Edge agv001 arrived at B3, discarded first path element, published remaining path (1 nodes left)
+Edge agv001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Edge agv001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 8, ETA: 12.5s)
+Starting task execution for truck001 with duration 10s
+Edge agv001 location changed: B3 -> B3-B4
+Edge agv001 location changed: B3 -> B3-B4
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Sanitized location for robot001: B2
+Sanitized location for robot001: B2
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Already at B2; discarding first path element and proceeding
+Already at B2; discarding first path element and proceeding
+Edge robot001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Edge robot001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Already at B2; discarding first path element and proceeding
+Edge robot001 location changed: B2 -> B2-B3
+Edge robot001 location changed: B2 -> B2-B3
+Edge robot001 starting movement (path from MQTT): B2 -> B3 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Sanitized location for agv001: B4
+Sanitized location for agv001: B4
+Already at B4; discarding first path element and proceeding
+Already at B4; discarding first path element and proceeding
+Transitioning agv001 to COMPLETING (path empty, destination reached); presetting nulls
+Transitioning agv001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge agv001 phase changed: assigned -> completing
+Edge agv001 phase changed: assigned -> completing
+Starting task execution for agv001 with duration 10s
+Starting task execution for agv001 with duration 10s
+Edge truck001 phase changed: completing -> assigned
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for truck001; phase shifted.
+Edge truck001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Starting task execution for truck001 with duration 10s
+Edge truck001 phase changed: completing -> assigned
+Transitioning truck001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge agv001 phase changed: completing -> assigned
+Transitioning agv001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for truck001; phase shifted.
+Edge truck001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+Edge agv001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for agv001; phase shifted.
+Edge agv001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Starting task execution for agv001 with duration 10s
+Starting task execution for truck001 with duration 10s
+Transitioning truck001 to IDLE; resetting attributes
+Edge truck001 task changed: transporting_shipment_unknown -> idle
+Edge truck001 phase changed: completing -> idle
+Task completed for truck001 at B4
+Connected to AWS IoT Core
+Subscribed to edge tasks and traffic updates
+Starting simulation for 5 edges...
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+Starting task execution for agv001 with duration 10s
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Sanitized location for robot001: B3
+Edge truck001 phase changed: en_route_start -> assigned
+Already at B3; discarding first path element and proceeding
+Already at A1; discarding first path element and proceeding
+Edge robot001 starting movement (path from MQTT): B3 -> B4 (Distance: 1 nodes, Speed: 6, ETA: 16.666666666666668s)
+Edge truck001 starting movement (path from MQTT): A1 -> B1 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge robot001 location changed: B3 -> B3-B4
+Edge truck001 location changed: A1 -> A1-B1
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Sanitized location for truck001: B1
+Already at B1; discarding first path element and proceeding
+Edge truck001 starting movement (path from MQTT): B1 -> B2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 location changed: B1 -> B3
+Edge truck001 location changed: B1 -> B3
+Edge agv001 phase changed: completing -> assigned
+Edge agv001 phase changed: completing -> assigned
+Edge truck001 location changed: B1 -> B3
+Transitioning agv001 to COMPLETING (path empty, destination reached); presetting nulls
+Transitioning agv001 to COMPLETING (path empty, destination reached); presetting nulls
+Edge truck001 arrived at B3, discarded first path element, published remaining path (2 nodes left)
+Edge truck001 arrived at B3, discarded first path element, published remaining path (2 nodes left)
+Edge agv001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for agv001; phase shifted.
+Edge agv001 phase changed: assigned -> completing
+Path emptied after arrival at B4 for agv001; phase shifted.
+Edge agv001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+Edge agv001 arrived at B4, discarded first path element, published remaining path (0 nodes left)
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Transitioning agv001 to IDLE; resetting attributes
+Transitioning agv001 to IDLE; resetting attributes
+Edge agv001 task changed: unloading_truck_shipment_shipment_7 -> idle
+Edge agv001 phase changed: completing -> idle
+Task completed for agv001 at B4
+Edge agv001 task changed: unloading_truck_shipment_shipment_7 -> idle
+Edge agv001 phase changed: completing -> idle
+Task completed for agv001 at B4
+Edge truck001 starting movement (path from MQTT): B3 -> B2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+Edge truck001 starting movement (path from MQTT): B3 -> B2 (Distance: 1 nodes, Speed: 10, ETA: 10s)
+DEBUG: Edge agv001 idle - staying at B4, awaiting task.
+DEBUG: Edge agv001 idle - staying at B4, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge truck001 location changed: B3 -> B3-B2
+Edge truck001 location changed: B3 -> B3-B2
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+DEBUG: Edge conveyor001 idle - staying at E3, awaiting task.
+DEBUG: Edge crane001 idle - staying at A2, awaiting task.
+Edge robot001 location changed: B3-B4 -> B1
+Edge robot001 arrived at B1, discarded first path element, published remaining path (1 nodes left)
+Edge robot001 location changed: B1 -> B2
+Edge robot001 arrived at B2, discarded first path element, published remaining path (1 nodes left)

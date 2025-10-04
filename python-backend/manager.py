@@ -1,5 +1,6 @@
 import sys
 import asyncio
+from datetime import datetime  # ADD: For ISO datetime parsing in shipment handler
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -100,11 +101,65 @@ async def handle_traffic_update(db, mqtt_client, edge_id, analyzer):
     else:
         logger.debug(f"No reroute needed for {edge_id} (port free, low congestion)")
 
-# Async MQTT handler task (integrates analyzer)
-async def mqtt_handler(db, mqtt_client, analyzer):
+# ADD: New handler for shipment creation events (after handle_traffic_update)
+async def handle_new_shipment(db, task_assigner, analyzer, message):
+    try:
+        topic = str(message.topic)
+        if 'harboursense/shipment/new' in topic:
+            payload = json.loads(message.payload.decode())
+            shipment_id = payload['id']
+            arrival_node = payload['arrivalNode']
+            status = payload['status']  # e.g., 'waiting' or 'arrived'
+            current_location = payload.get('currentLocation', arrival_node)
+            created_at = payload['createdAt']
+
+            # Sync to DB if not exists (idempotent)
+            existing = await db.shipments.find_one({'id': shipment_id})
+            if not existing:
+                await db.shipments.insert_one({
+                    'id': shipment_id,
+                    'arrivalNode': arrival_node,
+                    'status': status,
+                    'currentLocation': current_location,
+                    'createdAt': datetime.fromisoformat(created_at.replace('Z', '+00:00')) if created_at else datetime.now()  # Handle ISO with timezone
+                })
+                logger.info(f"New shipment {shipment_id} synced from MQTT to DB at {arrival_node}")
+
+            # Trigger assignment: Start with 'unloading' stage (crane at dock)
+            # Fallback destination if analyzer.get_stage_destination not available
+            destination_node = 'B2'  # Default processing area
+            try:
+                destination_node = analyzer.get_stage_destination('unloading', {'id': shipment_id, 'arrivalNode': arrival_node})
+            except AttributeError:
+                logger.debug("Analyzer.get_stage_destination unavailable; using default 'B2'")
+            
+            task_details = {
+                'shipmentId': shipment_id,
+                'startNode': arrival_node,
+                'destinationNode': destination_node
+            }
+            crane_id = await task_assigner.assign_stage_device(shipment_id, 'unloading', task_details)
+            if crane_id:
+                logger.info(f"MQTT-triggered unloading assignment for {shipment_id}: crane {crane_id}")
+                # Optional: Trigger predictive chaining if gap allows (uncomment if calculate_chain_etas implemented)
+                # etas = await task_assigner.calculate_chain_etas(shipment_id, 'unloading', {'unloading': ['crane'], 'processing': ['agv']}, arrival_node)
+                # if etas.get('nextShipmentGap', 0) > 30:  # 30s buffer
+                #     logger.info(f"Pre-positioning chain for {shipment_id} (gap: {etas['nextShipmentGap']}s)")
+            else:
+                logger.warning(f"No crane available for new shipment {shipment_id} via MQTT")
+    except Exception as e:
+        logger.error(f"Error handling new shipment MQTT: {e}")
+
+# REPLACE: Updated MQTT handler task (integrates analyzer and new shipment handling)
+async def mqtt_handler(db, mqtt_client, analyzer, task_assigner):  # ADD: task_assigner param
+    # Subscribe to edge updates (existing)
     topic_filter = "harboursense/edge/+/update"
     await mqtt_client.subscribe(topic_filter)
     logger.info(f"Manager subscribed to MQTT topic filter: {topic_filter}")
+
+    # ADD: Subscribe to new shipments
+    await mqtt_client.subscribe('harboursense/shipment/new')
+    logger.info("Manager subscribed to shipment/new for real-time arrivals")
 
     async for message in mqtt_client.messages:
         topic = str(message.topic)  # Convert Topic object to string
@@ -115,6 +170,12 @@ async def mqtt_handler(db, mqtt_client, analyzer):
             logger.error(f"Error decoding MQTT payload: {e}, raw={message.payload}")
             continue
 
+        # ADD: Handle new shipment FIRST (before edge processing)
+        if 'harboursense/shipment/new' in topic:
+            await handle_new_shipment(db, task_assigner, analyzer, message)
+            continue  # Skip to next message (shipment-specific)
+
+        # Existing edge processing (unchanged)
         edge_id = None
         try:
             data = json.loads(payload)
@@ -185,6 +246,7 @@ async def setup():
         # Start analyzer's dynamic MQTT listener (event-driven on path updates)
         asyncio.create_task(analyzer.start_mqtt_listener())
         logger.info("TrafficAnalyzer listener started (dynamic)")
+        
 
         task_assigner = TaskAssigner(db, mqtt_client, analyzer)  # Pass analyzer for metrics
         shipment_manager = ShipmentManager(db, task_assigner)
@@ -197,28 +259,12 @@ async def setup():
         asyncio.create_task(shipment_watcher(db, shipment_manager))
         # Removed periodic_traffic_analysis—now dynamic via analyzer
         asyncio.create_task(task_assigner.monitor_and_assign())  # Assuming this method exists in TaskAssigner
-        asyncio.create_task(mqtt_handler(db, mqtt_client, analyzer))  # Pass analyzer
+        asyncio.create_task(mqtt_handler(db, mqtt_client, analyzer, task_assigner))  # ADD: Pass task_assigner
 
         logger.info("Setup complete, monitoring...")
 
         # Keep running
         await asyncio.Event().wait()  # Or use asyncio.gather if you have tasks to await
-
-# Update TaskAssigner to use analyzer (add to task_assigner.py if needed)
-# In async def assign_task(self, device_type, task_details):
-#     # Use analyzer for congestion-aware path
-#     await self.analyzer.analyze_metrics(f"Assignment for {device_type}")
-#     node_loads = self.analyzer.get_current_loads()
-#     route_congestion = self.analyzer.get_route_congestion()
-#     predicted_loads = self.analyzer.get_predicted_loads()
-#     path = self.planner.compute_path(  # Or your compute method
-#         task_details['startNode'], task_details['destinationNode'],
-#         node_loads, route_congestion, predicted_loads
-#     )
-#     # ... rest of assignment, publish initial path to traffic MQTT if len(path) > 1
-#     if path and len(path) > 1:
-#         await self.mqtt_client.publish(f"harboursense/traffic/{selected_device['id']}", json.dumps({'path': path}))
-#     # ... 
-
+        
 if __name__ == "__main__":
     asyncio.run(setup())

@@ -411,3 +411,40 @@
 2025-10-04 01:56:16,323 - INFO - Traffic analysis completed
 2025-10-04 01:56:46,330 - INFO - Starting traffic analysis
 2025-10-04 01:56:46,495 - INFO - Traffic analysis completed
+2025-10-04 12:21:50,908 - INFO - Starting traffic analysis
+2025-10-04 12:21:51,413 - INFO - Traffic analysis completed
+2025-10-04 12:22:21,411 - INFO - Starting traffic analysis
+2025-10-04 12:22:21,602 - INFO - Traffic analysis completed
+2025-10-04 12:30:45,987 - INFO - Starting traffic analysis
+2025-10-04 12:30:46,423 - INFO - Traffic analysis completed
+2025-10-04 12:31:16,446 - INFO - Starting traffic analysis
+2025-10-04 12:31:16,639 - INFO - Traffic analysis completed
+2025-10-04 13:43:12,620 - INFO - Starting traffic analysis
+2025-10-04 13:43:13,103 - INFO - Traffic analysis completed
+2025-10-04 13:43:43,122 - INFO - Starting traffic analysis
+2025-10-04 13:43:43,335 - INFO - Traffic analysis completed
+2025-10-04 13:44:13,340 - INFO - Starting traffic analysis
+2025-10-04 13:44:13,603 - INFO - Traffic analysis completed
+2025-10-04 13:44:43,609 - INFO - Starting traffic analysis
+2025-10-04 13:44:43,815 - INFO - Traffic analysis completed
+2025-10-04 13:45:13,827 - INFO - Starting traffic analysis
+2025-10-04 13:45:14,032 - INFO - Traffic analysis completed
+2025-10-04 13:45:43,280 - INFO - Starting traffic analysis
+2025-10-04 13:45:43,708 - INFO - Traffic analysis completed
+2025-10-04 16:04:38,707 - INFO - Analyzing traffic dynamically (triggered by startup)
+2025-10-04 16:04:38,836 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,008 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,121 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,160 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,192 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,272 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,307 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,309 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,418 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,457 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,573 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,615 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,722 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,771 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)
+2025-10-04 16:04:39,895 - INFO - Metrics updated and persisted
+2025-10-04 16:04:39,930 - INFO - Analyzing traffic dynamically (triggered by Assignment for truck001)

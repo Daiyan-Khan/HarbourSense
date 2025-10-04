@@ -18732,3 +18732,7 @@
 2025-10-04 01:48:30,071 - INFO - Assigned task to truck001 with path ['A5', 'A4', 'B4']
 2025-10-04 01:55:55,673 - INFO - Assigned task to truck001 with path ['E5', 'D5', 'C5', 'B5', 'B4']
 2025-10-04 01:55:55,675 - INFO - Assigned task to truck001 with path ['E5', 'D5', 'C5', 'B5', 'B4']
+2025-10-04 12:21:51,227 - INFO - Assigned task to truck001 with path ['A4', 'B4']
+2025-10-04 12:22:18,150 - INFO - Assigned task to truck001 with path ['B4']
+2025-10-04 12:22:18,150 - INFO - Assigned task to truck001 with path ['B4']
+2025-10-04 12:30:46,213 - INFO - Assigned task to truck001 with path ['D2', 'C2', 'B2', 'B3', 'B4']

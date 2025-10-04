@@ -10,7 +10,7 @@ async function migrateEdges() {
 
     const db = client.db('port');
     const edgeDevicesCol = db.collection('edgeDevices');
-    const edges = require('./test-edge.json');  // Load devices from edge.json
+    const edges = require('../test-edge.json');  // Load devices from edge.json
 
     // Delete existing documents (optional - comment out if you don't want to wipe data)
     const deleteResult = await edgeDevicesCol.deleteMany({});

@@ -27,6 +27,9 @@ const device = awsIot.device({
   offlineQueueMaxSize: 0
 });
 
+// Global cache for traffic suggestions and paths from MQTT (avoids Mongo queries)
+let suggestionsByEdge = {}; // { edgeId: { eta, suggestedPath, ... } }
+
 // Constants for ETA calculation
 const NODE_BASE_DISTANCE = 100; // Base units per node
 const EDGE_SPEEDS = {
@@ -38,17 +41,70 @@ const EDGE_SPEEDS = {
   unknown: 5   // Fallback
 };
 
-// New: Sanitize location to single node
-function sanitizeLocation(location) {
-  if (typeof location !== 'string' || !location || location.toLowerCase() === 'null') return 'Unknown';
-  const nodes = location.split('-').filter(node => node.trim() !== '');
-  if (nodes.length === 0) return 'Unknown';
-  const uniqueNodes = [...new Set(nodes)];  // Remove duplicates
-  if (uniqueNodes.length === 2) return uniqueNodes.join('-');  // Keep transit 'A-B'
-  return uniqueNodes[uniqueNodes.length - 1];  // Single last node
+// Enum for states
+const TaskPhase = Object.freeze({
+  IDLE: 'idle',
+  ENROUTE_START: 'en_route_start',
+  ASSIGNED: 'assigned',
+  COMPLETING: 'completing'
+});
+
+// Default idle attributes
+const IDLE_DEFAULTS = {
+  task: 'idle',
+  nextNode: 'Null',
+  finalNode: 'Null',
+  startNode: 'Null',
+  eta: 'N/A',
+  journeyTime: 'N/A'
+};
+
+// Transition functions (return update object for DB/MQTT)
+function transitionToIdle(currentEdge) {
+  console.log(`Transitioning ${currentEdge.id} to IDLE; resetting attributes`);
+  return { ...IDLE_DEFAULTS, taskPhase: TaskPhase.IDLE };
 }
 
-// New: Helper to update state and log changes (skip if new task is "awaiting task")
+function transitionToEnrouteStart(currentEdge, taskData) {
+  if (currentEdge.taskPhase !== TaskPhase.IDLE) {
+    throw new Error('Can only assign task from IDLE');
+  }
+  console.log(`Transitioning ${currentEdge.id} to ENROUTE_START with task ${taskData.task}`);
+  return {
+    task: taskData.task,
+    taskPhase: TaskPhase.ENROUTE_START,
+    startNode: taskData.startNode || 'Null',
+    finalNode: taskData.finalNode || 'Null',
+    path: taskData.path || [], // Receive full path array
+    eta: 'N/A',
+    journeyTime: 0
+  };
+}
+
+function transitionToAssigned(currentEdge) {
+  if (currentEdge.taskPhase !== TaskPhase.ENROUTE_START || currentEdge.currentLocation !== currentEdge.startNode) {
+    throw new Error('Can only transition to ASSIGNED if at start node');
+  }
+  console.log(`Transitioning ${currentEdge.id} to ASSIGNED`);
+  return { taskPhase: TaskPhase.ASSIGNED };
+}
+
+function transitionToCompleting(currentEdge) {
+  if (currentEdge.taskPhase !== TaskPhase.ASSIGNED || currentEdge.currentLocation !== currentEdge.finalNode) {
+    throw new Error('Can only transition to COMPLETING if at final node');
+  }
+  console.log(`Transitioning ${currentEdge.id} to COMPLETING; presetting nulls`);
+  return {
+    taskPhase: TaskPhase.COMPLETING,
+    nextNode: 'Null',
+    finalNode: 'Null',
+    eta: 'N/A',
+    journeyTime: 'N/A',
+    path: [] // Clear path on completion
+  };
+}
+
+// Helper to update state and log changes (skip if new task is "awaiting task")
 async function updateEdgeState(db, edgeId, updates) {
   const edgeBefore = await db.collection('edgeDevices').findOne({ id: edgeId });
   await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: updates });
@@ -71,235 +127,128 @@ async function updateEdgeState(db, edgeId, updates) {
   return edgeAfter;
 }
 
-// New: Function to handle task execution with timer
-async function executeTask(edgeId, db, device, durationSeconds) {
+// New: Sanitize location to single node
+// New sanitize: collapse duplicates and always return single or valid transit
+function sanitizeLocation(location, forTransit = false) {
+  if (!location || typeof location !== 'string') return 'Unknown';
+  // Split on '-', trim
+  const parts = location.split('-').map(p => p.trim()).filter(Boolean);
+  // Remove consecutive duplicates
+  const deduped = parts.filter((p, i) => i === 0 || p !== parts[i - 1]);
+  if (forTransit && deduped.length === 2) {
+    return `${deduped[0]}-${deduped[1]}`;
+  }
+  // For comparisons or storage, return only last
+  return deduped[deduped.length - 1];
+}
+
+// Function to handle task execution with timer
+async function executeTask(edgeId, db, device, durationSeconds = 10) {
   console.log(`Starting task execution for ${edgeId} with duration ${durationSeconds}s`);
-  await updateEdgeState(db, edgeId, { taskCompletionTime: durationSeconds, taskRemaining: durationSeconds });
 
   // Countdown in seconds
   for (let remaining = durationSeconds; remaining > 0; remaining--) {
     await new Promise(resolve => setTimeout(resolve, 1000));
-    await updateEdgeState(db, edgeId, { taskRemaining: remaining });
     // Publish progress update
     device.publish(`harboursense/edge/${edgeId}/progress`, JSON.stringify({ id: edgeId, remaining }));
   }
 
-  // Task complete: Reset to idle and notify
-  const updatedEdge = await updateEdgeState(db, edgeId, { 
-    taskPhase: 'idle', 
-    task: 'idle', 
-    nextNode: 'Null', 
-    finalNode: 'None', 
-    startNode: 'None', 
-    path: [], 
-    eta: 'N/A', 
-    taskCompletionTime: 'N/A', 
-    taskRemaining: 0, 
-    journeyTime: 'N/A' 
-  });
-  device.publish(`harboursense/edge/${edgeId}/task_completed`, JSON.stringify({ id: edgeId, location: updatedEdge.currentLocation, task: updatedEdge.task }));
-  console.log(`Task completed for ${edgeId} at ${updatedEdge.currentLocation}`);
+  // Task complete: Transition to idle and notify
+  const edge = await db.collection('edgeDevices').findOne({ id: edgeId });
+  const updates = transitionToIdle(edge);
+  await updateEdgeState(db, edgeId, updates);
+  device.publish(`harboursense/edge/${edgeId}/task_completed`, JSON.stringify({ id: edgeId, location: edge.currentLocation, task: updates.task, status: 'completed' }));
+  console.log(`Task completed for ${edgeId} at ${edge.currentLocation}`);
 }
 
-async function runPortSimulation() {
-  const client = new MongoClient(uri);
-  await client.connect();
-  const db = client.db('port');
-
-  device.on('connect', async () => {
-    console.log('✅ Connected to AWS IoT Core');
-    device.subscribe('harboursense/edge/+/task');
-    console.log('📡 Subscribed to edge tasks');
-    console.log('DEBUG: Subscribed to topic: harboursense/edge/+/task');  // Added debug for subscription
-
-    const edges = await db.collection('edgeDevices').find().toArray();  // Use 'edgeDevices' consistently
-
-    if (edges.length) {
-      console.log(`Starting simulation for ${edges.length} edges...`);
-      edges.forEach(edge => edgeAutonomousLoop(edge.id, db, device));
-    } else {
-      console.log('⚠️ No edges found.');
-    }
-  });
-
-  device.on('error', (err) => console.error('❌ AWS IoT error:', err));
-
-  device.on('message', async (topic, payload) => {
-    try {
-      console.log(`DEBUG: Message received on topic: ${topic}`);  // Added debug for incoming topic
-      const match = topic.match(/^harboursense\/edge\/([^/]+)\/task$/);
-      if (!match) return;
-
-      const edgeId = match[1];
-      const taskData = JSON.parse(payload.toString());
-      console.log(`📥 Task received for edge ${edgeId}:`, taskData);
-      console.log(`DEBUG: Parsed task data for ${edgeId}: ${JSON.stringify(taskData)}`);  // Added debug for parsed data
-
-      // Update with logging via helper (no full path stored here; manager handles)
-      await updateEdgeState(db, edgeId, {
-        task: taskData.task,
-        nextNode: taskData.nextNode || "Null",
-        finalNode: taskData.finalNode || taskData.nextNode || "None",
-        startNode: taskData.startNode || "None",  // New: From manager
-        taskPhase: taskData.taskPhase || 'enroute_to_start',  // New: From manager, default to start phase
-        eta: taskData.eta || "N/A",
-        taskCompletionTime: "N/A",
-        journeyTime: taskData.journeyTime || "N/A"
-      });
-      console.log(`DEBUG: Updated edge ${edgeId} in 'edgeDevices' with new task data including phase`);
-
-      console.log(`🔄 Edge ${edgeId} updated with new task from manager, starting movement simulation`);
-      // No immediate simulateMovement here; loop will handle based on state
-    } catch (err) {
-      console.error('⚠️ Error processing message:', err);
-    }
-  });
-
-  // Start periodic shipment generation
-  generateShipmentsPeriodically(db);
-}
-
-async function edgeAutonomousLoop(edgeId, db, device) {
-  while (true) {
-    const edge = await db.collection('edgeDevices').findOne({ id: edgeId });  // Use 'edgeDevices' consistently
-    console.log(`DEBUG: Checking edge ${edgeId} - Task: ${edge?.task || 'none'}, Phase: ${edge?.taskPhase || 'none'}, Next Node: ${edge?.nextNode || 'none'}, Location: ${edge?.currentLocation || 'none'}`);  // Updated debug for phase
-
-    if (!edge) {
-      console.log(`DEBUG: Edge ${edgeId} not found, waiting before retry`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      continue;
-    }
-
-    // FIX: Auto-kickstart phase if task exists but phase is idle (prevents sticking without manager update)
-    if (edge.taskPhase === 'idle' && (edge.task !== 'idle' || (edge.nextNode && edge.nextNode !== "Null"))) {
-      console.log(`DEBUG: Auto-starting phase for ${edgeId} from 'idle' to 'enroute_to_start' (task/nextNode present)`);
-      await updateEdgeState(db, edgeId, { 
-        taskPhase: 'enroute_to_start',
-        task: edge.task || 'move'  // Ensure non-idle task
-      });
-      continue;  // Re-check in next loop iteration
-    }
-
-    if (edge.taskPhase === 'idle' && (!edge.nextNode) || edge.nextNode === "Null"  ) {
-      console.log(`DEBUG: Edge ${edgeId} in idle phase, awaiting task or nextNode from manager`);  // Wait for instruction
-      await new Promise(resolve => setTimeout(resolve, 5000));  // Wait 5s
-      continue;
-    }
-
-    // Phase-specific logic
-    if (edge.taskPhase === 'enroute_to_start' && edge.currentLocation === edge.startNode) {
-      // Arrived at startNode: Switch to 'executing' and simulate task (e.g., loading)
-      const executionTime = Math.floor(Math.random() * 30) + 10;  // Mock loading time
-      console.log(`✅ Edge ${edgeId} arrived at startNode ${edge.startNode} - Starting execution (Time: ${executionTime}s)`);
-      await executeTask(edgeId, db, device, executionTime);
-
-      // Execution complete: Switch to 'enroute_to_complete' and wait for manager's next hop
-      await updateEdgeState(db, edgeId, { taskPhase: 'enroute_to_complete', nextNode: "Null" });
-      console.log(`🔄 Edge ${edgeId} execution complete at startNode - Awaiting next hop from manager for completion`);
-      continue;  // Loop will wait
-    }
-
-    if (edge.taskPhase === 'enroute_to_complete' && edge.currentLocation === edge.finalNode) {
-      // Arrived at finalNode: Complete task and set to 'idle'
-      console.log(`✅ Edge ${edgeId} arrived at finalNode ${edge.finalNode} - Completing task and resetting to idle`);
-      await updateEdgeState(db, edgeId, { 
-        task: 'idle', 
-        taskPhase: 'idle', 
-        nextNode: "Null", 
-        finalNode: "None", 
-        startNode: "None", 
-        eta: "N/A", 
-        taskCompletionTime: "N/A", 
-        journeyTime: "N/A" 
-      });
-
-      // Publish completion with phase for manager
-      const completionPayload = { id: edgeId, currentLocation: edge.finalNode, taskPhase: 'idle', status: 'completed' };
-      device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(completionPayload));
-      console.log(`DEBUG: Published task completion for ${edgeId} on topic: harboursense/edge/${edgeId}/update with phase`);
-      console.log(`✅ Edge ${edgeId} completed task and is now idle, ready for new assignment from manager`);
-      continue;
-    }
-
-    console.log(`DEBUG: Starting simulation for active edge ${edgeId} in phase ${edge.taskPhase}`);  // Added debug for starting simulation
-    await simulateMovement(edgeId, db, device);
-  }
-}
-
-// Improved simulateMovement for hop-by-hop: One segment only, reset nextNode on arrival
+// Simulate movement: Traverse full path autonomously, discard on arrival (enhanced for MQTT path/suggestion pulls)
 async function simulateMovement(edgeId, db, device) {
-  const edgesCol = db.collection('edgeDevices');
-  const historyCol = db.collection('edgeHistory');
-  const edge = await edgesCol.findOne({ id: edgeId });
-  if (!edge) return;
+  // At beginning of each tick: Fetch fresh edge data from DB
+  let edge = await db.collection('edgeDevices').findOne({ id: edgeId });
+  if (!edge) {
+    console.log(`No edge found for ${edgeId}`);
+    return;
+  }
+
+  // Always collapse to single node for currentLocation (integrated sanitization)
+  const sanitizedLoc = sanitizeLocation(edge.currentLocation);
+  if (sanitizedLoc !== edge.currentLocation) {
+    // Update if changed (e.g., was in transit like 'A1-A2', now 'A2')
+    edge.currentLocation = sanitizedLoc;
+    await db.collection('edgeDevices').updateOne(
+      { id: edgeId },
+      { $set: { currentLocation: sanitizedLoc } }
+    );
+    console.log(`Sanitized location for ${edgeId}: ${sanitizedLoc}`);
+  }
+
+  // Pull path and suggestions from MQTT cache (no Mongo query for trafficData)
+  const suggestion = suggestionsByEdge[edgeId] || {};
+  if (suggestion.suggestedPath && Array.isArray(suggestion.suggestedPath) && suggestion.suggestedPath.length > 0) {
+    // Override path with latest MQTT suggestion if available
+    await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: suggestion.suggestedPath } });
+    console.log(`🔄 Overrode path for ${edgeId} with MQTT suggestion: ${suggestion.suggestedPath.join(' -> ')}`);
+    edge.path = suggestion.suggestedPath; // Update local for this movement
+  }
+
+  if (!edge.path || edge.path.length === 0) {
+    console.log(`No path available for ${edgeId}; checking phases...`);
+    return; // Will handle in loop
+  }
 
   let currentLocation = sanitizeLocation(edge.currentLocation);
-  let nextNode = sanitizeLocation(edge.nextNode);
-  let finalNode = sanitizeLocation(edge.finalNode);
-  let taskPhase = edge.taskPhase;
-  let status = edge.status || 'unknown';
+  let nextNode = sanitizeLocation(edge.path[0]); // First element as next node (from MQTT/DB)
 
-  // Stationary check: Refactored to only trigger if nextNode null, status 'arrived', and NOT at final node
-  if (!nextNode || nextNode.toLowerCase() === 'null') {
-    if (status === 'arrived' && currentLocation !== finalNode) {
-      // Stationary: Waiting for next hop from manager (intermediate arrival)
-      await updateEdgeState(db, edgeId, { 
-  currentLocation: sanitizeLocation(nextNode), 
-  nextNode: "Null", 
-  journeyTime,
-  status: 'arrived'  // NEW: Persist in DB for stationary check
-});
+  // If already at nextNode, discard and proceed (no movement needed)
+  if (currentLocation === nextNode) {
+    // Arrival: before discarding, update DB with arrival and nextNode
+    await updateEdgeState(db, edgeId, {
+      currentLocation: nextNode,              // Force arrival location
+      nextNode: nextNode,                     // Expose the node just arrived at
+      taskPhase: TaskPhase.ASSIGNED           // Move into ASSIGNED so transitionToCompleting will pass
+    });
 
-      console.log(`DEBUG: Edge ${edgeId} is stationary at intermediate node ${currentLocation} (arrived, waiting for next hop); staying put.`);
+    // Now safe to discard the node from path
+    await db.collection('edgeDevices').updateOne(
+      { id: edgeId },
+      { $pull: { path: nextNode } }
+    );
 
-      // Publish stationary update (only if not idle to avoid spam)
-      if (edge.task !== 'idle') {
-        const stationaryPayload = { id: edgeId, currentLocation, status: 'stationary', eta: "Waiting" };
-        device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(stationaryPayload));
-        await historyCol.insertOne({ ...stationaryPayload, timestamp: new Date() });
-        console.log(`DEBUG: Published stationary update for ${edgeId}`);
+    console.log(`Already at ${nextNode}; discarding first path element and proceeding`);
+    // Refresh edge after pull
+    edge = await db.collection('edgeDevices').findOne({ id: edgeId });
+    if (edge.path.length === 0) {
+      // Path empty: Attempt phase shift
+      if (edge.currentLocation === edge.finalNode) {
+        const updates = transitionToCompleting(edge);
+        await updateEdgeState(db, edgeId, updates);
+      } else if (edge.currentLocation === edge.startNode && edge.taskPhase === TaskPhase.ENROUTE_START) {
+        const updates = transitionToAssigned(edge);
+        await updateEdgeState(db, edgeId, updates);
       }
-      return;  // Exit to wait in loop
-    } else if (status === 'arrived' && currentLocation === finalNode && taskPhase === 'enroute_to_complete') {
-      // At final node: Force reset to idle (your existing logic, triggered only here)
-      console.log(`DEBUG: Forcing reset for ${edgeId} at final node ${currentLocation} in enroute_to_complete`);
-      await updateEdgeState(db, edgeId, { 
-        task: 'idle', 
-        taskPhase: 'idle', 
-        nextNode: "Null", 
-        finalNode: "None", 
-        startNode: "None", 
-        eta: "N/A", 
-        taskCompletionTime: "N/A", 
-        journeyTime: "N/A" 
-      });
-
-      // Publish completion
-      const completionPayload = { id: edgeId, currentLocation, taskPhase: 'idle', status: 'completed' };
-      device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(completionPayload));
-      console.log(`DEBUG: Published forced completion for ${edgeId}`);
+      // Publish empty remaining path to trigger analyzer (end of journey)
+      device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify({
+        remainingPath: [],
+        currentLocation: nextNode,
+        taskPhase: edge.taskPhase
+      }));
       return;
-    } else {
-      // Not arrived or other conditions: Log and skip stationary (allow potential movement if nextNode gets set)
-      console.log(`DEBUG: Skipping stationary for ${edgeId} (status: ${status}, location: ${currentLocation} vs final: ${finalNode})`);
     }
-  } else {
-    // Valid nextNode: Proceed with movement
-    console.log(`DEBUG: Valid nextNode detected for ${edgeId}; continuing movement simulation`);
+    nextNode = edge.path[0]; // Next after discard
   }
 
   // Calculate distance (Manhattan on grid)
   function nodeDistance(a, b) {
     if (!a || typeof a !== 'string' || !b || typeof b !== 'string') {
       console.warn('Invalid or null nodes in nodeDistance:', a, b);
-      return 0;  // Treat as "Waiting" with zero distance
+      return 0;
     }
 
     const matchA = a.match(/([A-Z]+)([0-9]+)/);
     const matchB = b.match(/([A-Z]+)([0-9]+)/);
     if (!matchA || !matchB) {
       console.warn('Invalid node format in nodeDistance:', a, b);
-      return 0;  // Fallback to "Waiting"
+      return 0;
     }
 
     const colA = matchA[1];
@@ -312,62 +261,177 @@ async function simulateMovement(edgeId, db, device) {
 
   const distance = nodeDistance(currentLocation, nextNode);
   const speed = EDGE_SPEEDS[edge.type] || EDGE_SPEEDS.unknown;
-  const etaSeconds = Math.max(1, (distance * NODE_BASE_DISTANCE) / speed);  // Min 1s to avoid zero/instant
-  const etaMs = etaSeconds * 1000;  // For setTimeout
+  const etaSeconds = Math.max(1, (distance * NODE_BASE_DISTANCE) / speed);
 
-  console.log(`🚚 Edge ${edgeId} starting movement: ${currentLocation} -> ${nextNode} (Distance: ${distance} nodes, Speed: ${speed}, ETA: ${etaSeconds}s)`);
-  console.log(`DEBUG: Edge ${edgeId} movement initiated from ${currentLocation}`);
+  // Use MQTT suggestion for ETA (fallback to calculated)
+  const suggestedEta = suggestion.eta ? parseFloat(suggestion.eta) : etaSeconds;
+  let journeyTime = (edge.journeyTime || 0) + suggestedEta;
 
-  // Update to transit location
-  const transitLocation = `${currentLocation}-${nextNode}`;  // Standardized to "-"
+  console.log(`Edge ${edgeId} starting movement (path from MQTT): ${currentLocation} -> ${nextNode} (Distance: ${distance} nodes, Speed: ${speed}, ETA: ${suggestedEta}s)`);
+
+  // Then, when starting movement: Update to transit location
+  const fromNode = currentLocation;
+  const toNode = sanitizeLocation(nextNode);
+  const transitLocation = `${fromNode}-${toNode}`;
+  // Update only once, no duplicates:
   await updateEdgeState(db, edgeId, { currentLocation: transitLocation });
-  console.log(`DEBUG: Updated location for ${edgeId} to transit: ${transitLocation}`);
-
-  // Incorporate traffic suggestion if available (override ETA if suggested)
-  const trafficData = await db.collection('trafficData').findOne({}, { sort: { timestamp: -1 } });
-  const suggestion = trafficData?.suggestions.find(s => s.edgeId === edgeId) || {};
-  const suggestedEta = suggestion.eta || etaSeconds;
-  let journeyTime = (edge.journeyTime || 0) + suggestedEta;  // FIXED: Handle undefined journeyTime
-
-  console.log(`⏱ Edge ${edgeId} transit ETA: ${suggestedEta}s (traffic suggestion: ${JSON.stringify(suggestion)})`);
-  console.log(`DEBUG: Calculated ETA for ${edgeId}: ${suggestedEta}s, New Journey Time: ${journeyTime}`);
 
   const payload = {
     id: edgeId,
     currentLocation: transitLocation,
-    nextNode: nextNode,
-    finalNode: finalNode,
-    taskPhase: edge.taskPhase,  // Include phase in payload
+    path: edge.path,
+    finalNode: edge.finalNode,
+    taskPhase: edge.taskPhase,
     eta: suggestedEta,
-    taskCompletionTime: edge.taskCompletionTime,
     journeyTime
   };
 
   device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(payload));
-  console.log(`DEBUG: Published update for ${edgeId} on topic: harboursense/edge/${edgeId}/update`);
-  await historyCol.insertOne({ ...payload, timestamp: new Date(), status: 'enroute' });
-  console.log(`DEBUG: Inserted enroute history for ${edgeId}`);
+  await db.collection('edgeHistory').insertOne({ ...payload, timestamp: new Date(), status: 'enroute' });
 
-  // Wait for the ETA (use suggestedEta for timing)
+  // Wait for the ETA
   await new Promise(resolve => setTimeout(resolve, suggestedEta * 1000));
 
-  // Arrival: Update location, reset nextNode to Null, update journeyTime
-  await updateEdgeState(db, edgeId, { currentLocation: sanitizeLocation(nextNode), nextNode: "Null", journeyTime });
-  console.log(`DEBUG: Updated arrival location for ${edgeId} to ${sanitizeLocation(nextNode)}, nextNode reset to Null`);
+  // Later, on arrival:
+  const arrivedNode = toNode;
+  await updateEdgeState(db, edgeId, {
+    currentLocation: arrivedNode,
+    nextNode: arrivedNode,
+    taskPhase: TaskPhase.ASSIGNED
+  });
+  // Then discard:
+  await db.collection('edgeDevices').updateOne(
+    { id: edgeId },
+    { $pull: { path: arrivedNode } }
+  );
 
-  // Existing arrival publish (moved after checks for better flow)
-  const arrivalPayload = { id: edgeId, currentLocation: nextNode, taskPhase, status: 'arrived' };  
-  device.publish(`harboursense/edge/${edgeId}/update`, JSON.stringify(arrivalPayload));
-  console.log(`DEBUG: Published arrival update for ${edgeId} on topic: harboursense/edge/${edgeId}/update with phase`);
-  await historyCol.insertOne({ ...arrivalPayload, timestamp: new Date() });
-  console.log(`DEBUG: Inserted arrival history for ${edgeId}`);
-  console.log(`🎯 Edge ${edgeId} arrived at ${nextNode}`);
+  // ENHANCED: Publish remaining path back to traffic/update topic (feedback to analyzer/manager)
+  const remainingPath = edge.path; // Already pulled, so this is updated remaining
+  const arrivalPayload = { 
+    remainingPath: remainingPath,  // Key field for analyzer
+    currentLocation: nextNode, 
+    taskPhase: edge.taskPhase, 
+    finalNode: edge.finalNode,
+    status: 'arrived', 
+    traveled: nextNode // Report discarded node
+  };
+  device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify(arrivalPayload));  // NEW: Publish to analyzer's topic
+  await db.collection('edgeHistory').insertOne({ ...arrivalPayload, timestamp: new Date() });
+  console.log(`Edge ${edgeId} arrived at ${nextNode}, discarded first path element, published remaining path (${remainingPath.length} nodes left)`);
+}
 
-  // Check if at final (phase-specific)
-  if (nextNode === finalNode && edge.taskPhase === 'enroute_to_complete') {
-    // Trigger task completion logic in loop
-    console.log(`DEBUG: At final node; loop will handle completion`);
+async function edgeAutonomousLoop(edgeId, db, device) {
+  let moveCount = 0; // Safety counter to prevent infinite loops
+  while (true) {
+    const edge = await db.collection('edgeDevices').findOne({ id: edgeId });
+    if (!edge) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      continue;
+    }
+
+    const state = edge.taskPhase;
+
+    if (state === TaskPhase.IDLE) {
+      console.log(`DEBUG: Edge ${edgeId} idle - staying at ${edge.currentLocation}, awaiting task.`);
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Poll less frequently
+    } else if (state === TaskPhase.ENROUTE_START || state === TaskPhase.ASSIGNED) {
+      // ENHANCED: In enroute/assigned, ensure path from MQTT is current, then move if available
+      if (edge.path && edge.path.length > 0) {
+        await simulateMovement(edgeId, db, device);
+        moveCount++;
+        if (moveCount > 100) { // Safety: Break if too many moves (path should empty)
+          console.warn(`Max moves reached for ${edgeId}; resetting to idle`);
+          const updates = transitionToIdle(edge);
+          await updateEdgeState(db, edgeId, updates);
+          break;
+        }
+      } else {
+        // Path empty: Attempt phase shifts (pull new path via MQTT subscription if manager pushes)
+        console.log(`Path empty for ${edgeId} in ${state}; checking phase shift or awaiting MQTT update...`);
+        if (state === TaskPhase.ENROUTE_START && edge.currentLocation === edge.startNode) {
+          const updates = transitionToAssigned(edge);
+          await updateEdgeState(db, edgeId, updates);
+        } else if (state === TaskPhase.ASSIGNED && edge.currentLocation === edge.finalNode) {
+          const updates = transitionToCompleting(edge);
+          await updateEdgeState(db, edgeId, updates);
+        }
+        // Publish empty path feedback
+        device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify({
+          remainingPath: [],
+          currentLocation: edge.currentLocation,
+          taskPhase: state
+        }));
+      }
+    } else if (state === TaskPhase.COMPLETING) {
+      await executeTask(edgeId, db, device);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
   }
+}
+
+async function runPortSimulation() {
+  const client = new MongoClient(uri);
+  await client.connect();
+  const db = client.db('port');
+
+  device.on('connect', async () => {
+    console.log('Connected to AWS IoT Core');
+    device.subscribe('harboursense/edge/+/task');
+    device.subscribe('harboursense/traffic/+'); // Subscribe for manager/analyzer-pushed path updates and suggestions
+    console.log('Subscribed to edge tasks and traffic updates');
+
+    const edges = await db.collection('edgeDevices').find().toArray();
+    if (edges.length) {
+      console.log(`Starting simulation for ${edges.length} edges...`);
+      edges.forEach(edge => edgeAutonomousLoop(edge.id, db, device));
+    } else {
+      console.log('No edges found.');
+    }
+  });
+
+  device.on('error', (err) => console.error('AWS IoT error:', err));
+
+  device.on('message', async (topic, payload) => {
+    try {
+      const taskMatch = topic.match(/^harboursense\/edge\/([^/]+)\/task$/);
+      const trafficMatch = topic.match(/^harboursense\/traffic\/([^/]+)$/);
+
+      if (taskMatch) {
+        const edgeId = taskMatch[1];
+        const taskData = JSON.parse(payload.toString());
+        console.log(`Task received for edge ${edgeId}:`, taskData);
+
+        const edge = await db.collection('edgeDevices').findOne({ id: edgeId });
+        const updates = transitionToEnrouteStart(edge, taskData);
+        await updateEdgeState(db, edgeId, updates);
+        console.log(`Edge ${edgeId} updated with new task and full path from manager`);
+      } else if (trafficMatch) {
+        const edgeId = trafficMatch[1];
+        const trafficData = JSON.parse(payload.toString());
+        // Cache suggestions and paths from MQTT (e.g., from analyzer: { path, eta, suggestedPath, ... })
+        if (trafficData.path || trafficData.suggestedPath || trafficData.eta) {
+          suggestionsByEdge[edgeId] = {
+            ...suggestionsByEdge[edgeId],
+            path: trafficData.path || trafficData.suggestedPath,
+            eta: trafficData.eta,
+            suggestedPath: trafficData.suggestedPath || trafficData.path
+          };
+          console.log(`Cached MQTT traffic data for ${edgeId}: path=${(trafficData.path || []).join(' -> ')}, eta=${trafficData.eta}`);
+        }
+        // Optionally still update DB path for persistence, but movement now uses cache
+        if (trafficData.path && Array.isArray(trafficData.path)) {
+          await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: trafficData.path } });
+          console.log(`Updated path for ${edgeId} from MQTT traffic topic: ${trafficData.path.join(' -> ')}`);
+        }
+      }
+    } catch (err) {
+      console.error('Error processing message:', err);
+    }
+  });
+
+  // Start periodic shipment generation
+  generateShipmentsPeriodically(db);
 }
 
 async function generateShipmentsPeriodically(db) {
@@ -377,13 +441,13 @@ async function generateShipmentsPeriodically(db) {
     shipmentCounter++;
     const newShipment = {
       id: `shipment_${shipmentCounter}`,
-      arrivalNode: 'A1',  // Simplified to just "A1" (dock inferred from graph.json or MongoDB 'graph' collection)
+      arrivalNode: 'A1',  // Simplified to just "A1"
       status: 'waiting',
       createdAt: new Date()
     };
     await shipmentsColl.insertOne(newShipment);
     console.log(`New shipment generated: ${newShipment.id} at ${newShipment.arrivalNode}`);
-    await new Promise(resolve => setTimeout(resolve, 10000));  // Every 10 seconds (adjusted from 1 min for testing)
+    await new Promise(resolve => setTimeout(resolve, 60000));  // Every 60 seconds (updated comment for accuracy)
   }
 }
 

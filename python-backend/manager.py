@@ -8,9 +8,10 @@ import logging
 import json
 from motor.motor_asyncio import AsyncIOMotorClient
 from task_assigner import TaskAssigner  # Import your fixed task_assigner.py
-from traffic_analyzer import analyze_traffic  # Import fixed analyze_traffic
+from traffic_analyzer import TrafficAnalyzer, SmartRoutePlanner  # Updated import for class-based analyzer
 import aiomqtt  # Updated import (install via: pip install aiomqtt)
 import ssl  # For TLS setup
+from enum import Enum  # Add this import to fix the NameError
 
 # Logging setup with UTF-8 encoding to handle emojis
 logger = logging.getLogger("HarbourSenseManager")
@@ -21,6 +22,13 @@ logging.getLogger("pymongo.server_selection").setLevel(logging.WARNING)
 logging.getLogger("pymongo.cursor").setLevel(logging.WARNING)
 logging.getLogger("pymongo.command").setLevel(logging.WARNING)
 logger.setLevel(logging.DEBUG)
+
+class TaskPhase(Enum):
+    IDLE = 'idle'
+    ENROUTE_START = 'en_route_start'
+    ASSIGNED = 'assigned'
+    COMPLETING = 'completing'
+
 file_handler = logging.FileHandler("manager_log.txt", mode="a", encoding="utf-8")  # Add encoding
 console_handler = logging.StreamHandler(stream=sys.stdout)  # Explicitly set to stdout
 console_handler.setLevel(logging.DEBUG)
@@ -29,9 +37,6 @@ file_handler.setFormatter(formatter)
 console_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
-
-# In-memory tracking for hop-by-hop paths
-device_paths = {}  # e.g., {'truck001': {'path': ['A1', 'B1', 'B4'], 'current_index': 0, 'final': 'B4'}}
 
 class ShipmentManager:
     def __init__(self, db, task_assigner):
@@ -55,80 +60,86 @@ async def shipment_watcher(db, shipment_manager):
         waiting_shipments = await db.shipments.find({"status": {"$in": ["waiting", "processing"]}}).to_list(None)
         for shipment in waiting_shipments:
             await shipment_manager.process_shipment_steps(shipment)
-        await asyncio.sleep(5)
+        await asyncio.sleep(5)  # Debounce to reduce rapid assignments
 
-async def periodic_traffic_analysis(db):
-    while True:
-        await analyze_traffic(db)  # Now accepts db
-        await asyncio.sleep(30)
-
-# Placeholder for reroute check (customize based on your traffic data)
-def needs_reroute(current_node, remaining_path, traffic_data):
-    # Example: Check if any node in remaining_path has high congestion
+# Placeholder for reroute check (uses analyzer metrics)
+def needs_reroute(current_node, remaining_path, analyzer):
+    # Check if any node in remaining_path has high predicted load (threshold for efficiency)
+    predicted_loads = analyzer.get_predicted_loads()
     for node in remaining_path:
-        if traffic_data.get(node, {}).get('congestion_level', 0) > 0.7:  # Threshold
+        if predicted_loads.get(node, 0) > 2:  # Low threshold since port is free; adjust as needed
             return True
     return False
 
-# Async MQTT handler task
-async def mqtt_handler(db, mqtt_client):
+# Async function to check and publish reroute if needed (uses analyzer)
+async def handle_traffic_update(db, mqtt_client, edge_id, analyzer):
+    edge = await db.edgeDevices.find_one({'id': edge_id})
+    if not edge or not edge.get('path'):
+        return
+
+    # Trigger dynamic analysis
+    await analyzer.analyze_metrics(triggered_by=f"Reroute check for {edge_id}")
+    
+    remaining_path = edge['path'][1:] if len(edge['path']) > 1 else []  # Skip current
+    if needs_reroute(edge['currentLocation'], remaining_path, analyzer):
+        # Compute new path with analyzer metrics
+        start = edge['currentLocation']
+        destination = edge.get('destinationNode', edge.get('finalNode', 'B4'))  # Dynamic from DB
+        node_loads = analyzer.get_current_loads()
+        route_congestion = analyzer.get_route_congestion()
+        predicted_loads = analyzer.get_predicted_loads()
+        
+        new_path = analyzer.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads)
+        if new_path:
+            # Publish to traffic MQTT only if reroute needed (efficient for free port)
+            update_msg = {'path': new_path, 'finalNode': destination}
+            await mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps(update_msg))
+            logger.info(f"Pushed reroute for {edge_id} due to detected load: {new_path}")
+        else:
+            logger.warning(f"Failed to compute reroute for {edge_id}")
+    else:
+        logger.debug(f"No reroute needed for {edge_id} (port free, low congestion)")
+
+# Async MQTT handler task (integrates analyzer)
+async def mqtt_handler(db, mqtt_client, analyzer):
     topic_filter = "harboursense/edge/+/update"
     await mqtt_client.subscribe(topic_filter)
-    logger.info(f"Manager subscribed to MQTT topic filter: {topic_filter}")  # Removed emoji
+    logger.info(f"Manager subscribed to MQTT topic filter: {topic_filter}")
 
     async for message in mqtt_client.messages:
         topic = str(message.topic)  # Convert Topic object to string
         try:
             payload = message.payload.decode()
-            logger.debug(f"MQTT message received on topic={topic}, raw={payload}")  # Removed emoji
+            logger.debug(f"MQTT message received on topic={topic}, raw={payload}")
         except Exception as e:
             logger.error(f"Error decoding MQTT payload: {e}, raw={message.payload}")
             continue
 
-        edge_id = None  # Initialize to avoid UnboundLocalError
+        edge_id = None
         try:
             data = json.loads(payload)
             edge_id = topic.split('/')[2]  # Extract from harboursense/edge/<id>/update
             logger.debug(f"Received payload for {edge_id}: {json.dumps(data)}")
+            edge = await db.edgeDevices.find_one({'id': edge_id})
+            if not edge:
+                continue  # Changed from return to continue for loop safety
 
-            if data.get('status') == 'arrived':
-                logger.info(f"Arrival detected for {edge_id} at {data['currentLocation']}")
-                if edge_id in device_paths:
-                    path_info = device_paths[edge_id]
-                    current_index = path_info['current_index']
-                    full_path = path_info['path']
-                    logger.debug(f"Current state for {edge_id}: index={current_index}, path={full_path}, final={path_info['final']}")
+            current = data.get('currentLocation')
+            final = data.get('finalNode')
+            phase = data.get('taskPhase')
 
-                    if current_index < len(full_path) - 1:  # Not at final
-                        next_index = current_index + 1
-                        next_node = full_path[next_index]
+            # Check for reroute proactively on each progress update (using analyzer)
+            await handle_traffic_update(db, mqtt_client, edge_id, analyzer)
 
-                        # Optional: Recompute if traffic warrants it
-                        traffic_data = await analyze_traffic(db)  # Quick analysis (now async)
-                        logger.debug(f"Traffic data: {json.dumps(traffic_data)}")
-                        if needs_reroute(data['currentLocation'], full_path[next_index:], traffic_data):
-                            new_path = compute_path(data['currentLocation'], path_info['final'], traffic_data)  # Assume compute_path exists in task_assigner
-                            full_path = new_path
-                            next_node = full_path[1] if len(full_path) > 1 else 'Null'
-                            device_paths[edge_id]['path'] = full_path
-                            next_index = 0  # Reset index
-                            logger.info(f"Rerouted path for {edge_id}: {full_path}")
+            # Handle completion (no nextNode sends; edge handles autonomously)
+            if phase == 'assigned' and current == final:
+                # Device should transition to completing; server handles shipment
+                shipment = await db.shipments.find_one({'assignedDevice': edge_id, 'status': 'processing'})
+                if shipment:
+                    await db.shipments.update_one({'_id': shipment['_id']}, {'$set': {'status': 'completed'}})
+                    logger.info(f"Shipment {shipment['id']} completed by {edge_id}")
+                logger.info(f"Arrival detected for {edge_id} at {current}")
 
-                        # Send next hop with explicit status reset
-                        update_msg = {
-                            'task': 'transport',  # Or current task
-                            'nextNode': next_node,
-                            'finalNode': full_path[-1],
-                            'taskPhase': 'enroute_to_complete',  # Adjust phase as needed
-                            'status': 'enroute'  # Explicitly reset status to 'enroute'
-                        }
-                        await mqtt_client.publish(f"harboursense/edge/{edge_id}/task", json.dumps(update_msg))
-                        device_paths[edge_id]['current_index'] = next_index
-                        logger.info(f"Sent next hop to {edge_id}: nextNode={next_node}, finalNode={full_path[-1]}, taskPhase='enroute_to_complete', status='enroute'")
-                    else:
-                        logger.info(f"{edge_id} at final node; no further hops. Current phase: {data.get('taskPhase')}, status: {data.get('status')}")
-                else:
-                    logger.warning(f"No path info found for {edge_id} - possible assignment issue")
         except Exception as e:
             logger.error(f"Error processing MQTT message for {edge_id or 'unknown'}: {e} - Payload: {payload}")
 
@@ -142,7 +153,7 @@ async def setup():
     tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     tls_context.load_verify_locations(cafile="../certs/AmazonRootCA1.pem")
     tls_context.load_cert_chain(certfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
-                               keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key")
+                                keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key")
 
     async with aiomqtt.Client(
         hostname="a1dghi6and062t-ats.iot.us-east-1.amazonaws.com",
@@ -152,7 +163,7 @@ async def setup():
     ) as mqtt_client:
         logger.info("Async MQTT client initialized and connected")
 
-        # Load graph with conversion
+        # Load graph with conversion (reuse from traffic_analyzer)
         from traffic_analyzer import convert_bson_numbers  # Reuse from traffic_analyzer
         raw_nodes = await db.graph.find().to_list(None)
         if not raw_nodes:
@@ -168,36 +179,46 @@ async def setup():
                 logger.warning(f"Skipping invalid node without 'id': {node}")
         logger.info(f"Loaded graph with {len(graph)} nodes")
 
-        task_assigner = TaskAssigner(db, mqtt_client, graph)  # Pass async mqtt_client
+        # NEW: Instantiate TrafficAnalyzer for dynamic use
+        analyzer = TrafficAnalyzer(db, mqtt_client, graph)
+        
+        # Start analyzer's dynamic MQTT listener (event-driven on path updates)
+        asyncio.create_task(analyzer.start_mqtt_listener())
+        logger.info("TrafficAnalyzer listener started (dynamic)")
+
+        task_assigner = TaskAssigner(db, mqtt_client, analyzer)  # Pass analyzer for metrics
         shipment_manager = ShipmentManager(db, task_assigner)
+
+        # Initial analysis to populate metrics (since traffic MQTT empty/port free)
+        await analyzer.analyze_metrics("startup")
+        logger.info("Initial traffic analysis complete")
 
         # Create tasks
         asyncio.create_task(shipment_watcher(db, shipment_manager))
-        asyncio.create_task(periodic_traffic_analysis(db))
+        # Removed periodic_traffic_analysis—now dynamic via analyzer
         asyncio.create_task(task_assigner.monitor_and_assign())  # Assuming this method exists in TaskAssigner
-        asyncio.create_task(mqtt_handler(db, mqtt_client))  # Async MQTT handler
+        asyncio.create_task(mqtt_handler(db, mqtt_client, analyzer))  # Pass analyzer
 
         logger.info("Setup complete, monitoring...")
 
         # Keep running
         await asyncio.Event().wait()  # Or use asyncio.gather if you have tasks to await
 
-# Update assign_task in task_assigner.py (add this if not present)
-# async def assign_task(self, device_type, task_details):
-#     # Compute full path using your route_planner or similar
-#     path = self.compute_path(task_details['startNode'], task_details['destinationNode'])  # Assume this exists
-#     selected_device = # Your device selection logic
-#     device_paths[selected_device['id']] = {'path': path, 'current_index': 0, 'final': task_details['destinationNode']}
-#     # Send first hop
-#     first_hop = path[1] if len(path) > 1 else 'Null'
-#     payload = {
-#         'task': task_details['task'],
-#         'nextNode': first_hop,
-#         'finalNode': path[-1],
-#         'taskPhase': 'enroute_to_start'
-#     }
-#     await self.mqtt_client.publish(f"harboursense/edge/{selected_device['id']}/task", json.dumps(payload))
-#     return True
+# Update TaskAssigner to use analyzer (add to task_assigner.py if needed)
+# In async def assign_task(self, device_type, task_details):
+#     # Use analyzer for congestion-aware path
+#     await self.analyzer.analyze_metrics(f"Assignment for {device_type}")
+#     node_loads = self.analyzer.get_current_loads()
+#     route_congestion = self.analyzer.get_route_congestion()
+#     predicted_loads = self.analyzer.get_predicted_loads()
+#     path = self.planner.compute_path(  # Or your compute method
+#         task_details['startNode'], task_details['destinationNode'],
+#         node_loads, route_congestion, predicted_loads
+#     )
+#     # ... rest of assignment, publish initial path to traffic MQTT if len(path) > 1
+#     if path and len(path) > 1:
+#         await self.mqtt_client.publish(f"harboursense/traffic/{selected_device['id']}", json.dumps({'path': path}))
+#     # ... 
 
 if __name__ == "__main__":
     asyncio.run(setup())

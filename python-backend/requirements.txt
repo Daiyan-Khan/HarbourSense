@@ -6,3 +6,6 @@ paho-mqtt==1.6.1
 asyncio==3.4.3
 numpy==1.26.1  # If needed for analysis (e.g., anomalies)
 scikit-learn
+aiomqtt
+ssl
+enum

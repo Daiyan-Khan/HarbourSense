@@ -420,3 +420,9 @@
 2025-10-04 17:57:46,429 - INFO - Initial traffic analysis complete
 2025-10-04 17:57:46,430 - INFO - Setup complete, monitoring...
 2025-10-04 17:57:46,882 - INFO - Processed shipment shipment_12
+2025-10-04 18:11:37,273 - INFO - Connected to MongoDB
+2025-10-04 18:11:38,325 - INFO - Async MQTT client initialized and connected
+2025-10-04 18:11:38,866 - INFO - Loaded graph with 25 nodes
+2025-10-04 18:11:38,866 - INFO - TrafficAnalyzer listener started (dynamic)
+2025-10-04 18:11:39,081 - INFO - Initial traffic analysis complete
+2025-10-04 18:11:39,081 - INFO - Setup complete, monitoring...

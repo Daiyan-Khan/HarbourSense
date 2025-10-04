@@ -59,7 +59,7 @@ const IDLE_DEFAULTS = {
   journeyTime: 'N/A'
 };
 
-// Transition functions (return update object for DB/MQTT)
+// Transition functions (simplified: no location checks, rely on empty path trigger)
 function transitionToIdle(currentEdge) {
   console.log(`Transitioning ${currentEdge.id} to IDLE; resetting attributes`);
   return { ...IDLE_DEFAULTS, taskPhase: TaskPhase.IDLE };
@@ -82,18 +82,18 @@ function transitionToEnrouteStart(currentEdge, taskData) {
 }
 
 function transitionToAssigned(currentEdge) {
-  if (currentEdge.taskPhase !== TaskPhase.ENROUTE_START || currentEdge.currentLocation !== currentEdge.startNode) {
-    throw new Error('Can only transition to ASSIGNED if at start node');
+  if (currentEdge.taskPhase !== TaskPhase.ENROUTE_START) {
+    throw new Error('Can only transition to ASSIGNED from ENROUTE_START');
   }
-  console.log(`Transitioning ${currentEdge.id} to ASSIGNED`);
+  console.log(`Transitioning ${currentEdge.id} to ASSIGNED (path empty, start reached)`);
   return { taskPhase: TaskPhase.ASSIGNED };
 }
 
 function transitionToCompleting(currentEdge) {
-  if (currentEdge.taskPhase !== TaskPhase.ASSIGNED || currentEdge.currentLocation !== currentEdge.finalNode) {
-    throw new Error('Can only transition to COMPLETING if at final node');
+  if (currentEdge.taskPhase !== TaskPhase.ASSIGNED) {
+    throw new Error('Can only transition to COMPLETING from ASSIGNED');
   }
-  console.log(`Transitioning ${currentEdge.id} to COMPLETING; presetting nulls`);
+  console.log(`Transitioning ${currentEdge.id} to COMPLETING (path empty, destination reached); presetting nulls`);
   return {
     taskPhase: TaskPhase.COMPLETING,
     nextNode: 'Null',
@@ -203,9 +203,9 @@ async function simulateMovement(edgeId, db, device) {
   if (currentLocation === nextNode) {
     // Arrival: before discarding, update DB with arrival and nextNode
     await updateEdgeState(db, edgeId, {
-      currentLocation: nextNode,              // Force arrival location
-      nextNode: nextNode,                     // Expose the node just arrived at
-      taskPhase: TaskPhase.ASSIGNED           // Move into ASSIGNED so transitionToCompleting will pass
+      currentLocation: nextNode,               // Force arrival location
+      nextNode: nextNode,                      // Expose the node just arrived at
+      taskPhase: TaskPhase.ASSIGNED            // Move into ASSIGNED so transitionToCompleting will pass
     });
 
     // Now safe to discard the node from path
@@ -305,23 +305,39 @@ async function simulateMovement(edgeId, db, device) {
     { $pull: { path: arrivedNode } }
   );
 
+  // ENHANCED: If path now empty after discard, trigger phase shift immediately (before publishing)
+  edge = await db.collection('edgeDevices').findOne({ id: edgeId }); // Refresh
+  const remainingPath = edge.path;
+  if (remainingPath.length === 0) {
+    // Trigger based on current phase (reuse loop logic)
+    if (edge.taskPhase === TaskPhase.ENROUTE_START) {
+      const updates = transitionToAssigned(edge);
+      await updateEdgeState(db, edgeId, updates);
+    } else if (edge.taskPhase === TaskPhase.ASSIGNED) {
+      const updates = transitionToCompleting(edge);
+      await updateEdgeState(db, edgeId, updates);
+    }
+    console.log(`Path emptied after arrival at ${arrivedNode} for ${edgeId}; phase shifted.`);
+  }
+
   // ENHANCED: Publish remaining path back to traffic/update topic (feedback to analyzer/manager)
-  const remainingPath = edge.path; // Already pulled, so this is updated remaining
   const arrivalPayload = { 
     remainingPath: remainingPath,  // Key field for analyzer
-    currentLocation: nextNode, 
+    currentLocation: arrivedNode, 
     taskPhase: edge.taskPhase, 
     finalNode: edge.finalNode,
     status: 'arrived', 
-    traveled: nextNode // Report discarded node
+    traveled: arrivedNode // Report discarded node
   };
   device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify(arrivalPayload));  // NEW: Publish to analyzer's topic
   await db.collection('edgeHistory').insertOne({ ...arrivalPayload, timestamp: new Date() });
-  console.log(`Edge ${edgeId} arrived at ${nextNode}, discarded first path element, published remaining path (${remainingPath.length} nodes left)`);
+  console.log(`Edge ${edgeId} arrived at ${arrivedNode}, discarded first path element, published remaining path (${remainingPath.length} nodes left)`);
 }
 
 async function edgeAutonomousLoop(edgeId, db, device) {
   let moveCount = 0; // Safety counter to prevent infinite loops
+  let pathEmptyCount = 0; // Throttle empty path logs
+  const MAX_EMPTY_LOGS = 3; // Limit spam per edge
   while (true) {
     const edge = await db.collection('edgeDevices').findOne({ id: edgeId });
     if (!edge) {
@@ -339,6 +355,7 @@ async function edgeAutonomousLoop(edgeId, db, device) {
       if (edge.path && edge.path.length > 0) {
         await simulateMovement(edgeId, db, device);
         moveCount++;
+        pathEmptyCount = 0; // Reset throttle on movement
         if (moveCount > 100) { // Safety: Break if too many moves (path should empty)
           console.warn(`Max moves reached for ${edgeId}; resetting to idle`);
           const updates = transitionToIdle(edge);
@@ -346,16 +363,24 @@ async function edgeAutonomousLoop(edgeId, db, device) {
           break;
         }
       } else {
-        // Path empty: Attempt phase shifts (pull new path via MQTT subscription if manager pushes)
-        console.log(`Path empty for ${edgeId} in ${state}; checking phase shift or awaiting MQTT update...`);
-        if (state === TaskPhase.ENROUTE_START && edge.currentLocation === edge.startNode) {
+        // Path empty: Trigger phase shift based on current state (no location check needed)
+        pathEmptyCount++;
+        if (pathEmptyCount <= MAX_EMPTY_LOGS) {
+          console.log(`Path empty for ${edgeId} in ${state}; triggering phase shift...`);
+        } else if (pathEmptyCount === MAX_EMPTY_LOGS + 1) {
+          console.log(`Further path empty logs for ${edgeId} suppressed.`);
+        }
+
+        if (state === TaskPhase.ENROUTE_START) {
+          // Empty path in ENROUTE_START → assume start reached → to ASSIGNED
           const updates = transitionToAssigned(edge);
           await updateEdgeState(db, edgeId, updates);
-        } else if (state === TaskPhase.ASSIGNED && edge.currentLocation === edge.finalNode) {
+        } else if (state === TaskPhase.ASSIGNED) {
+          // Empty path in ASSIGNED → assume destination reached → to COMPLETING
           const updates = transitionToCompleting(edge);
           await updateEdgeState(db, edgeId, updates);
         }
-        // Publish empty path feedback
+        // Publish empty path feedback to manager/analyzer
         device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify({
           remainingPath: [],
           currentLocation: edge.currentLocation,
@@ -363,7 +388,7 @@ async function edgeAutonomousLoop(edgeId, db, device) {
         }));
       }
     } else if (state === TaskPhase.COMPLETING) {
-      await executeTask(edgeId, db, device);
+      await executeTask(edgeId, db, device); // This already transitions to IDLE on finish
     }
 
     await new Promise(resolve => setTimeout(resolve, 2000));

@@ -1,5 +1,5 @@
 // graph.js - Loads and exports the port graph from JSON
-const graphData = require('./test-graph.json');  // Auto-parses to JS array/object
+const graphData = require('./graph.json');  // Auto-parses to JS array/object
 
 // Optional: Add helpers for easier use
 const getNode = (id) => graphData.find(node => node.id === id);

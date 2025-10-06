@@ -2,7 +2,7 @@
 
 const { MongoClient } = require('mongodb');
 const { graphData } = require('./graph.js');  // Your graph loader for valid nodes/routes
-const devices = require('./edge.json');  // Load devices from test-edge.json
+const devices = require('./test-edge.json');  // Load devices from test-edge.json
 
 const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';
 

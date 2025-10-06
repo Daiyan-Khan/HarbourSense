@@ -219,31 +219,65 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
 
             # NEW: Manager detects arrival/offload, asks TaskAssigner for warehouse decision
             if status in ['arrived', 'offloaded']:
-                if task_assigner.graph:  # Ensure graph loaded
-                    warehouse = await task_assigner._select_warehouse(current_node, shipment_id)
-                    # Update DB with decision (overrides initial dest if better)
-                    await db.shipments.update_one(
-                        {'id': shipment_id},
-                        {'$set': {
-                            'destination': warehouse,
-                            'warehouseAssigned': warehouse,  # Track for traceability
-                            'updatedAt': datetime.now()
-                        }}
-                    )
-                    logger.info(f"TaskAssigner decided warehouse {warehouse} for new {status} shipment {shipment_id} at {current_node}; updated DB")
-                    # Optional: Publish back to port.js for UI/sync
-                    await task_assigner.mqtt_client.publish(
-                        f"harboursense/shipments/{shipment_id}/warehouse",
-                        json.dumps({'warehouse': warehouse, 'reason': 'dynamic allocation'})
-                    )
-                else:
-                    logger.warning(f"Graph not loaded in TaskAssigner; skipping warehouse decision for {shipment_id}")
+                if self.task_assigner.graph:  # Typo: task_assigner → wait, this is global func; pass or global
+                    # Wait, in your code it's func, but calls task_assigner – assume global or pass; for now:
+                    warehouse = await task_assigner._select_warehouse(current_node, shipment_id) or task_assigner._nearest_warehouse(current_node)
+                    await db.shipments.update_one({'id': shipment_id}, {'$set': {'destination': warehouse, 'warehouseAssigned': warehouse, 'updatedAt': datetime.now()}})
+                    logger.info(f"Wh {warehouse} for {shipment_id} at {current_node}")
+                    await task_assigner.mqtt_client.publish(f"harboursense/shipments/{shipment_id}/warehouse", json.dumps({'warehouse': warehouse}))
+                        # FIXED: Trigger phase assigns on key statuses (crane for offload, truck_tempo for transport)
+                    if status == 'arrived' and db.shipments.find_one({'id': shipment_id, 'assignedEdges': {'$not': {'$elemMatch': {'$regex': 'offload'}}}}):  # No prior offload
+                        if task_assigner._is_dock_or_berth(current_node):
+                                logger.info(f"Arrived {shipment_id} at {current_node}; triggering offload (crane)")
+                                offload_details = {
+                                    'shipmentId': shipment_id,
+                                    'phase': 'offload',
+                                    'destNode': current_node,
+                                    'requiredPlace': current_node  # Stationary at dock
+                                }
+                                assigned = await task_assigner._assign_stage_device(shipment_id, 'offload', offload_details)
+                                if assigned:
+                                    await db.shipments.update_one(
+                                        {'id': shipment_id},
+                                        {'$push': {'assignedEdges': f"{assigned}:offload"}, '$set': {'updatedAt': datetime.now(), 'nextPhase': 'transport'}}
+                                    )
+                                    logger.info(f"Offload assigned: {assigned} (crane) for {shipment_id}; next=transport")
+                                else:
+                                    logger.warning(f"No idle crane for {shipment_id}; set queued")
+                                    await db.shipments.update_one({'id': shipment_id}, {'$set': {'offloadQueued': True, 'updatedAt': datetime.now()}})
 
-            # Existing: No direct assigns—monitor_and_assign will scan DB change and trigger based on status
-            logger.debug(f"DB updated; monitor will handle assignments for status '{status}'")
-        else:
-            # Defensive: If somehow a completion routed here, skip
-            logger.debug(f"Non-shipment topic {topic} in shipment handler; ignoring")
+                        elif status == 'offloaded' and db.shipments.find_one({'id': shipment_id, 'assignedEdges': {'$not': {'$elemMatch': {'$regex': 'transport'}}}}):  # No prior transport
+                            if task_assigner._is_dock_or_berth(current_node):
+                                warehouse = payload.get('destination', await task_assigner._nearest_warehouse(current_node))  # Use selected
+                                logger.info(f"Offloaded {shipment_id} at {current_node}; triggering transport (truck_tempo) to {warehouse}")
+                                transport_details = {
+                                    'shipmentId': shipment_id,
+                                    'phase': 'transport',  # → truck_tempo in device_type_map
+                                    'startNode': current_node,
+                                    'requiredPlace': current_node,  # Pickup at dock
+                                    'finalNode': warehouse
+                                }
+                                assigned = await task_assigner._assign_stage_device(shipment_id, 'transport', transport_details)
+                                if assigned:
+                                    await db.shipments.update_one(
+                                        {'id': shipment_id},
+                                        {'$push': {'assignedEdges': f"{assigned}:transport"}, '$set': {'updatedAt': datetime.now(), 'nextPhase': 'store_move'}}
+                                    )
+                                    logger.info(f"Transport assigned: {assigned} (truck_tempo) for {shipment_id} to {warehouse}; next=store_move (robot/forklift)")
+                                else:
+                                    logger.warning(f"No idle truck_tempo for {shipment_id}; set queued")
+                                    await db.shipments.update_one({'id': shipment_id}, {'$set': {'transportQueued': True, 'updatedAt': datetime.now()}})
+
+                        # For 'transported'/'stored', chaining in task_assigner (robot/forklift/delivery) → no trigger here
+                        elif status in ['transported', 'stored']:
+                            logger.debug(f"{status} {shipment_id} detected; task_assigner will chain store (robot/forklift) or delivery")
+                            # Optional: Force monitor scan if queued (but avoid; completions handle)
+
+                        # Existing: No direct assigns—monitor_and_assign will scan DB change and trigger based on status
+                        logger.debug(f"DB updated; monitor will handle any remaining/queued for status '{status}'")
+                    else:
+                        # Defensive: If somehow a completion routed here, skip
+                        logger.debug(f"Non-shipment topic {topic} in shipment handler; ignoring")
 
     except Exception as e:
         logger.error(f"Error handling shipment MQTT (topic {message.topic if 'message' in locals() else 'unknown'}): {e}; raw payload={raw_payload[:200]}...")

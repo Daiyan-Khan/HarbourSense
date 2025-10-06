@@ -1,7 +1,7 @@
 [
   {
-    "id": "truck001",
-    "type": "truck",
+    "id": "truck_tempo_1",
+    "type": "truck_tempo",
     "roles": ["transport"],
     "currentLocation": "A1",
     "task": "idle",
@@ -12,7 +12,43 @@
     "taskPhase": "idle",
     "eta": 0,
     "taskCompletionTime": 0,
-    "journeyTime": 0
+    "journeyTime": 0,
+    "speed": 15,
+    "capacity": 20
+  },
+  {
+    "id": "truck_tempo_2",
+    "type": "truck_tempo",
+    "roles": ["transport"],
+    "currentLocation": "B1",
+    "task": "idle",
+    "nextNode": null,
+    "finalNode": null,
+    "startNode": null,
+    "path": [],
+    "taskPhase": "idle",
+    "eta": 0,
+    "taskCompletionTime": 0,
+    "journeyTime": 0,
+    "speed": 15,
+    "capacity": 20
+  },
+  {
+    "id": "truck_delivery_1",
+    "type": "truck_delivery",
+    "roles": ["delivery"],
+    "currentLocation": "B4",
+    "task": "idle",
+    "nextNode": null,
+    "finalNode": null,
+    "startNode": null,
+    "path": [],
+    "taskPhase": "idle",
+    "eta": 0,
+    "taskCompletionTime": 0,
+    "journeyTime": 0,
+    "speed": 10,
+    "capacity": 50
   },
   {
     "id": "agv001",

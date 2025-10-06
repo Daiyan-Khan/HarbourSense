@@ -272,7 +272,7 @@ class TrafficAnalyzer:
             tls_context.load_verify_locations(cafile="../certs/AmazonRootCA1.pem")
             tls_context.load_cert_chain(
                 certfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
-                keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"  # Note: Fixed 'privat' typo if present
+                keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"
             )
             self.mqtt_client = aiomqtt.Client(
                 hostname="a1dghi6and062t-ats.iot.us-east-1.amazonaws.com",
@@ -317,7 +317,6 @@ class TrafficAnalyzer:
             except Exception as e:
                 logger.error(f"Unexpected error in TrafficAnalyzer listener: {e}")
                 await asyncio.sleep(retry_delay)
-
     async def analyze_metrics(self, triggered_by=""):
         """Analyze traffic from DB, update internal state, compute congestion/loads. Enhanced with sensor alerts for predictions."""
         logger.info(f"Starting analysis, triggered by {triggered_by}")
@@ -356,8 +355,12 @@ class TrafficAnalyzer:
         route_load = {}
         node_loads = {}
         predicted_loads = defaultdict(int)  # Initialize with sensor penalties
+        # FIXED: Optional wh filter (boost only if node is warehouse; add your wh list)
+        warehouses = ['B4', 'D2', 'E5']  # Known wh nodes
         for node, penalty in alert_penalties.items():
-            predicted_loads[node] += penalty  # Boost predictions from alerts (repairs)
+            if node in warehouses:  # Wh-specific boost (avoids noise on docks)
+                predicted_loads[node] += penalty
+                logger.debug(f"Wh-specific penalty {penalty} for {node}")
 
         # For congestion prediction
         for edge in edges:
@@ -391,7 +394,8 @@ class TrafficAnalyzer:
 
             # FIXED: Safe get/None scrub for all node fields (get returns None if key=None, so explicit check)
             if 'eta' in edge and edge.get('eta') != "NA" and next_node != "Null":
-                predicted_loads[next_node] += 1  # Predict arrival load
+                if next_node in warehouses:  # Wh-only pred inc (focus)
+                    predicted_loads[next_node] += 1  # Predict arrival load
 
             if 'finalNode' in edge and 'journeyTime' in edge:
                 final_node_raw = edge.get('finalNode')
@@ -400,7 +404,8 @@ class TrafficAnalyzer:
                         final_node_raw = "na"
                     final_node = str(final_node_raw).replace("-", "")  # Standardize, safe
                     if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
-                        predicted_loads[final_node] += 1  # Predict future loads based on ETA and finalNode with string checks
+                        if final_node in warehouses:  # Wh-only
+                            predicted_loads[final_node] += 1  # Predict future loads based on ETA and finalNode with string checks
 
         # Dynamic congestion per route: ratio and level
         route_congestion = {}
@@ -423,7 +428,7 @@ class TrafficAnalyzer:
         # Update internal state
         self.node_loads = node_loads
         self.route_congestion = route_congestion
-        self.predicted_loads = predicted_loads  # Now includes sensor boosts
+        self.predicted_loads = predicted_loads  # Now includes sensor boosts (wh-focused)
 
         # Optional: Generate suggestions and update edges (idle-only, like before)
         suggestions = []
@@ -514,7 +519,7 @@ class TrafficAnalyzer:
             "nodeTraffic": node_loads,
             "routeCongestion": route_congestion,
             "nodeCongestion": node_congestion,
-            "predictedLoads": dict(predicted_loads),  # Now sensor-enhanced
+            "predictedLoads": dict(predicted_loads),  # Now sensor-enhanced (wh-focused)
             "suggestions": suggestions,
             "triggered_by": triggered_by,
             "anomaly_penalties": alert_penalties  # Log sensor impacts
@@ -528,8 +533,13 @@ class TrafficAnalyzer:
     def get_route_congestion(self):
         return dict(self.route_congestion)
 
-    def get_predicted_loads(self):
-        return dict(self.predicted_loads)
+    def get_predicted_load(self, wh_id):
+        """Return int or 0 for warehouse ID (e.g., 'B4'); uses predicted_loads state. FIXED: Align to self.predicted_loads; wh validation."""
+        if not wh_id or wh_id not in ['B4', 'D2', 'E5']:  # Wh-specific (add your list; skip non-wh)
+            logger.debug(f"Invalid/non-wh wh_id {wh_id}; return 0")
+            return 0
+        pred = self.predicted_loads.get(wh_id, 0)  # FIXED: Use computed predicted_loads (not unset predictions)
+        return int(pred) if pred is not None else 0
 
     async def start_mqtt_listener(self):
         """Clean MQTT listener: Subscribe to path updates, trigger analysis/reroutes."""

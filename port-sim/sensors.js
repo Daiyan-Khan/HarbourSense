@@ -43,7 +43,12 @@ async function runSimulator() {
     // Function to generate and post data for a single sensor
     const simulateSensor = (sensor) => {
       const postData = async () => {
-        const reading = generateReading(sensor.type);
+        let reading = generateReading(sensor.type);
+        // 10% chance of spike/anomaly
+        if (Math.random() < 0.1) {
+          reading = generateSpike(sensor.type, reading);
+          console.log(`Spike detected for ${sensor.id}: ${reading}`);
+        }
         const payload = {
           id: sensor.id,
           type: sensor.type,
@@ -101,6 +106,17 @@ function generateReading(type) {
     case 'occupancy': return Math.floor(Math.random() * 101);
     case 'motion': return Math.random() < 0.5 ? 'detected' : 'none';
     default: return (Math.random() * 100).toFixed(2);
+  }
+}
+
+function generateSpike(type, baseReading) {
+  switch (type) {
+    case 'temperature': return (parseFloat(baseReading) + Math.random() * 20 + 10).toFixed(2); // Spike to >50°C
+    case 'humidity': return (parseFloat(baseReading) + Math.random() * 50).toFixed(2); // >100%
+    case 'vibration': return (parseFloat(baseReading) + Math.random() * 15 + 5).toFixed(2); // >15
+    case 'occupancy': return 100; // Full occupancy
+    case 'motion': return 'detected'; // Always detect
+    default: return (parseFloat(baseReading) * 2).toFixed(2);
   }
 }
 

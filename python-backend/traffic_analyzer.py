@@ -11,7 +11,7 @@ import heapq
 from math import inf  # For infinite distances (float('inf') alternative)
 from motor.motor_asyncio import AsyncIOMotorClient  # If needed for DB in analyzer
 from pymongo.operations import UpdateOne  # FIXED: Correct import for bulk ops
-
+import ssl
 def convert_bson_numbers(obj):
     """
     Recursively converts BSON types (e.g., ObjectId to str, Int64 to int) for JSON serialization.
@@ -263,379 +263,263 @@ class TrafficAnalyzer:
         if self.mqtt_client:
             asyncio.create_task(self._ensure_connected())
 
+    # FIXED: _ensure_connected (around line 272) - Create client if None, no _connected assumption
     async def _ensure_connected(self):
-        """Ensure MQTT client is connected; retry if needed."""
-        max_retries = 3
-        retry = 0
-        while retry < max_retries:
+        """Ensure MQTT client is connected; create if None."""
+        if self.mqtt_client is None:
+            # Hardcode params from manager.py (minimal, no param passing needed)
+            tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            tls_context.load_verify_locations(cafile="../certs/AmazonRootCA1.pem")
+            tls_context.load_cert_chain(
+                certfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
+                keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"  # Note: Fixed 'privat' typo if present
+            )
+            self.mqtt_client = aiomqtt.Client(
+                hostname="a1dghi6and062t-ats.iot.us-east-1.amazonaws.com",
+                port=8883,
+                identifier="traffic_analyzer",  # Unique to avoid conflicts
+                tls_context=tls_context
+            )
+            await self.mqtt_client.__aenter__()  # Connect explicitly
+            logger.info("TrafficAnalyzer: Created and connected new MQTT client")
+        else:
+            # Existing check (safe now, as None handled above)
             try:
-                if not self.mqtt_client._connected:  # FIXED: Use internal _connected
-                    await self.mqtt_client.connect()
-                logger.info("MQTT client connected in analyzer")
-                return
+                if not self.mqtt_client._connected:
+                    await self.mqtt_client.__aenter__()  # Reconnect if needed
+                    logger.debug("TrafficAnalyzer: Reconnected existing MQTT client")
+            except AttributeError:
+                # Fallback if no _connected (older aiomqtt)
+                await self.mqtt_client.__aenter__()
+        return self.mqtt_client
+
+    # FIXED: start_mqtt_listener (around line 650) - Use created client with reconnection loop
+    async def start_mqtt_listener(self):
+        """Start listener for edge positions; reconnects if drops."""
+        retry_delay = 5
+        while True:
+            try:
+                await self._ensure_connected()  # FIXED: Now safe, creates/reconnects client
+                # Subscribe once (re-sub on reconnect via ensure_connected)
+                await self.mqtt_client.subscribe("harboursense/edge/position/+")
+                logger.info("TrafficAnalyzer: Subscribed to edge positions")
+
+                async for message in self.mqtt_client.messages:
+                    await self._handle_position_update(message)  # Your existing handler (e.g., parse position, trigger analyze_metrics)
+
             except aiomqtt.MqttError as e:
-                retry += 1
-                logger.warning(f"MQTT connect failed (retry {retry}/{max_retries}): {e}")
-                await asyncio.sleep(2 ** retry)  # Exponential backoff
-        logger.error("Failed to connect MQTT after retries")
+                logger.warning(f"TrafficAnalyzer MQTT error (disconnected?): {e}. Retrying in {retry_delay}s...")
+                if hasattr(self, 'mqtt_client') and self.mqtt_client:
+                    await self.mqtt_client.__aexit__(None, None, None)  # Clean close
+                    self.mqtt_client = None  # Reset for recreate
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 60)  # Backoff
+            except Exception as e:
+                logger.error(f"Unexpected error in TrafficAnalyzer listener: {e}")
+                await asyncio.sleep(retry_delay)
 
     async def analyze_metrics(self, triggered_by=""):
-        """Restored core method: Analyze traffic from DB, update internal state, compute congestion/loads."""
-        logger.info(f"Starting analysis triggered by: {triggered_by}")
-        # Fetch graph and capacities from MongoDB (with fallback)
-        graph_doc = await self.db.graph.find_one()
-        route_caps_doc = await self.db.routeCapacities.find_one()
-        # Use DB graph or fallback to parsed GRAPH_LIST
-        if graph_doc:
-            db_graph = graph_doc.get('nodes', {})
-            graph = self.planner.flat_graph.copy()
-            graph.update(db_graph)  # Merge/override
-        else:
-            graph = parse_graph(GRAPH_LIST)
-        route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
-        # Fetch anomalies from sensorAlerts
-        anomalies = [doc async for doc in self.db.sensorAlerts.find({'alert': True})]
-        anomaly_penalties = {a['node']: 5 if a['severity'] == 'high' else 2 for a in anomalies}  # Penalty scores
-        # Define blocked nodes (e.g., docks, non-route points) - adapt based on your graph
-        blocked_nodes = ['C3', 'dock_A1', 'loading_zone']  # Example: block specific docks or areas
-        # Fetch edges (now including posted ETA, journeyTime, finalNode for predictions)
-        edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming 'edgeDevices' collection
-        # Calculate current loads (single pass optimization)
-        route_load = {}
-        node_loads = {}
-        predicted_loads = {}  # For congestion prediction
-        for edge in edges:
-            if not edge or not isinstance(edge, dict):  # Null/dict check
-                logger.warning("Skipping invalid edge document")
-                continue
-            # Idle-only check per workflow (skip if not idle)
-            if edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
-                logger.debug(f"Skipping non-idle edge {edge.get('id')}: task={edge.get('task')}, phase={edge.get('taskPhase')}")
-                continue
-            # FIXED: Safe get + None scrub for all node fields (get returns None if key=None, so explicit check)
-            current_loc_raw = edge.get('currentLocation')
-            if current_loc_raw is None or current_loc_raw == 'Null':
-                current_loc = 'na'  # Placeholder for idle
-            else:
-                current_loc = str(current_loc_raw).replace('->', '-')  # Standardize
-            
-            next_node_raw = edge.get('nextNode')
-            if next_node_raw is None or next_node_raw == 'Null':
-                next_node = 'Null'  # Placeholder for idle (no next)
-            else:
-                next_node = str(next_node_raw).replace('->', '-')  # Standardize
-            
-            if next_node == "Null":  # Handle placeholder as no next node
-                continue
-            route_key = f"{current_loc}-{next_node}"
-            route_load[route_key] = route_load.get(route_key, 0) + 1
-            node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
-            # Predict future loads based on ETA and finalNode with string checks
-            if 'eta' in edge and edge.get('eta') != "N/A" and next_node != "Null":
-                predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1
-            if 'finalNode' in edge and 'journeyTime' in edge:
-                final_node_raw = edge.get('finalNode')
-                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "N/A" and edge['journeyTime'] < 60:  # Near-term with string checks
-                    if final_node_raw == 'Null':  # FIXED: Explicit scrub
-                        final_node_raw = 'na'
-                    final_node = str(final_node_raw).replace('->', '-')  # Standardize, safe
-                    if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
-                        predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
-        # Dynamic congestion per route (ratio and level) - FIXED: Safe capacity (no / dict)
-        route_congestion = {}
-        for route_key, load in route_load.items():
-            cap_val = route_capacities.get(route_key, 3)
-            capacity = self.planner.safe_float(cap_val, 3.0)  # FIXED: Safe, prevents dict
-            ratio = load / capacity if capacity > 0 else 0
-            if ratio < 0.5:
-                level = 'low'
-            elif ratio < 0.8:
-                level = 'medium'
-            else:
-                level = 'high'
-            route_congestion[route_key] = {'ratio': ratio, 'level': level}
-        # Node congestion (dynamic, assuming node capacities in graph)
-        node_congestion = {}
-        for node, load in node_loads.items():
-            capacity = graph.get(node, {}).get('capacity', 5)  # Default 5, fetch from graph if available
-            capacity = self.planner.safe_float(capacity, 5.0)  # FIXED: Safe
-            ratio = load / capacity if capacity > 0 else 0
-            level = 'high' if ratio > 0.8 else 'low'
-            node_congestion[node] = {'ratio': ratio, 'level': level}
-        # Update internal state
-        self.node_loads = node_loads
-        self.route_congestion = route_congestion
-        self.predicted_loads = predicted_loads
-        # Optional: Generate suggestions and update edges (idle-only, like before)
-        suggestions = []
-        route_planner = SmartRoutePlanner(graph, blocked_nodes)
-        bulk_ops = []
-        for edge in edges:
-            if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
-                continue  # Idle-only
-            # FIXED: Safe get + None scrub for current and destination
-            current_node_raw = edge.get('currentLocation')
-            if current_node_raw is None or current_node_raw == 'Null':
-                current_node = 'na'
-            else:
-                current_node = str(current_node_raw).replace('->', '-')  # Standardize
-            
-            destination_raw = edge.get('finalNode')
-            if destination_raw is None or destination_raw == 'Null' or destination_raw == 'None' or destination_raw == 'null':
-                logger.debug(f"Skipping idle edge {edge.get('id')} with Null finalNode (no route needed)")
-                continue  # FIXED: No path computation for undefined idle
-            else:
-                destination_val = str(destination_raw).replace('->', '-')  # Standardize, safe
-                destination = destination_val
-            neighbors = route_planner.get_neighbors(current_node)  # Filtered neighbors
-            # Compute intelligent path using congestion data, predictions, and blocking
-            suggested_path = route_planner.compute_path(current_node, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-            # Fallback to best single-hop if full path not computable
-            if not suggested_path or len(suggested_path) < 2:
-                best_node = "Null"
-                best_eta = "N/A"
-                min_eta = inf  # For finding the best
-                for neighbor, dist in neighbors:
-                    neighbor = str(neighbor).replace('->', '-')  # FIXED: Safe str + standardize
-                    route_key = f"{current_node}-{neighbor}"
-                    congestion = route_congestion.get(route_key, {'ratio': 0, 'level': 'low'})
-                    if congestion['level'] == 'high':
-                        continue  # Skip highly congested routes
-                    speed = edge.get('speed', 10)
-                    eta = dist / speed * (1 + congestion['ratio'])  # Adjust ETA for congestion
-                    if eta < min_eta:
-                        min_eta = eta
-                        best_node = neighbor
-                # Ultimate fallback
-                if best_node == "Null" and neighbors:
-                    best_neighbor, best_dist = next(iter(neighbors))
-                    best_node = str(best_neighbor).replace('->', '-')  # FIXED: Safe str + standardize
-                    best_eta = best_dist / edge.get('speed', 10)
-                else:
-                    best_eta = min_eta if min_eta != inf else "N/A"
-                suggested_path = [current_node, best_node] if best_node != "Null" else None
-            else:
-                best_node = suggested_path[1]
-                best_eta = sum(1 for i in range(len(suggested_path)-1)) / edge.get('speed', 10)  # Simple unit weight ETA
-            # Prepare bulk update (optional; comment out if not needed during analysis)
-            next_node_val = best_node if best_node != "Null" else "Null"
-            eta_val = best_eta if best_eta != "N/A" else "N/A"
-            bulk_ops.append(UpdateOne(  # FIXED: Use UpdateOne directly
-                {'id': edge['id']},
-                {'$set': {'nextNode': next_node_val,
-                        'eta': eta_val,
-                        'suggestedPath': suggested_path}}
-            ))
-            # Append suggestion with traffic insights
-            route_key = f"{current_node}-{best_node}"
-            suggestions.append({
-                'edgeId': edge['id'],
-                'currentLocation': current_node,
-                'suggestedNextNode': best_node,
-                'suggestedPath': suggested_path,
-                'eta': best_eta,
-                'congestionRatio': route_congestion.get(route_key, {'ratio': 0})['ratio'],
-                'congestionLevel': route_congestion.get(route_key, {'level': 'low'})['level'],
-                'nodeCongestionAtNext': node_congestion.get(best_node, {'level': 'low'})['level']
-            })
-        # Execute bulk updates if any (optional)
-        if bulk_ops:
-            try:
-                result = await self.db.edgeDevices.bulk_write(bulk_ops)
-                logger.debug(f"Bulk update: {result.modified_count} edges updated")
-            except Exception as e:
-                logger.error(f"Bulk update failed: {e}")
-        # Store results in DB
-        await self.db.trafficData.insert_one({
-            'timestamp': datetime.utcnow(),
-            'routeLoad': route_load,
-            'nodeTraffic': node_loads,
-            'routeCongestion': route_congestion,
-            'nodeCongestion': node_congestion,
-            'predictedLoads': predicted_loads,
-            'suggestions': suggestions,
-            'triggered_by': triggered_by,
-            'anomaly_penalties': anomaly_penalties
-        })
-        logger.info(f"Analysis complete: {len(suggestions)} suggestions generated, triggered by {triggered_by}")
+        """Analyze traffic from DB, update internal state, compute congestion/loads. Enhanced with sensor alerts for predictions."""
+        logger.info(f"Starting analysis, triggered by {triggered_by}")
 
-        """Restored core method: Analyze traffic from DB, update internal state, compute congestion/loads."""
-        logger.info(f"Starting analysis triggered by: {triggered_by}")
-        # Fetch graph and capacities from MongoDB (with fallback)
+        # Fetch graph and capacities from MongoDB with fallback
         graph_doc = await self.db.graph.find_one()
         route_caps_doc = await self.db.routeCapacities.find_one()
-        # Use DB graph or fallback to parsed GRAPH_LIST
+
         if graph_doc:
             db_graph = graph_doc.get('nodes', {})
             graph = self.planner.flat_graph.copy()
             graph.update(db_graph)  # Merge/override
         else:
             graph = parse_graph(GRAPH_LIST)
+
         route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
-        # Fetch anomalies from sensorAlerts
-        anomalies = [doc async for doc in self.db.sensorAlerts.find({'alert': True})]
-        anomaly_penalties = {a['node']: 5 if a['severity'] == 'high' else 2 for a in anomalies}  # Penalty scores
+
+        # NEW: Integrate sensor alerts for predicted load boosts (repairs/congestion)
+        recent_alerts = await self.db.alerts.find({"resolved": False}).to_list(None)  # Unresolved anomalies
+        alert_penalties = {}  # node: penalty (e.g., 20 for high vibration → virtual load)
+        for alert in recent_alerts:
+            node = alert.get("node", "")
+            severity = alert.get("severity", "low")
+            anomaly_type = alert.get("anomaly_type", "")
+            if anomaly_type in ["vibration_spike", "occupancy_high"] and node:  # Core repair triggers
+                penalty = 20 if severity == "high" else 10  # Boost predicted load (simulates repair tasks)
+                alert_penalties[node] = alert_penalties.get(node, 0) + penalty
+                logger.debug(f"Applied sensor penalty {penalty} to predicted load for {node} (alert: {anomaly_type}, severity: {severity})")
+
         # Define blocked nodes (e.g., docks, non-route points) - adapt based on your graph
-        blocked_nodes = ['C3', 'dock_A1', 'loading_zone']  # Example: block specific docks or areas
+        blocked_nodes = ["C3", "dockA1", "loadingzone"]  # Example: block specific docks or areas
+
         # Fetch edges (now including posted ETA, journeyTime, finalNode for predictions)
-        edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming 'edgeDevices' collection
-        # Calculate current loads (single pass optimization)
+        edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming edgeDevices collection
+
         route_load = {}
         node_loads = {}
-        predicted_loads = {}  # For congestion prediction
+        predicted_loads = defaultdict(int)  # Initialize with sensor penalties
+        for node, penalty in alert_penalties.items():
+            predicted_loads[node] += penalty  # Boost predictions from alerts (repairs)
+
+        # For congestion prediction
         for edge in edges:
             if not edge or not isinstance(edge, dict):  # Null/dict check
                 logger.warning("Skipping invalid edge document")
                 continue
-            # Idle-only check per workflow (skip if not idle)
-            if edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
+
+            # Idle-only check per workflow; skip if not idle
+            if edge.get('taskPhase') != "idle" or edge.get('task') == "idle":
                 logger.debug(f"Skipping non-idle edge {edge.get('id')}: task={edge.get('task')}, phase={edge.get('taskPhase')}")
                 continue
-            # FIXED: Safe get + None scrub for all node fields (get returns None if key=None, so explicit check)
+
             current_loc_raw = edge.get('currentLocation')
-            if current_loc_raw is None or current_loc_raw == 'Null':
-                current_loc = 'na'  # Placeholder for idle
+            if current_loc_raw is None or current_loc_raw in ["Null", "null", None]:
+                current_loc = "na"  # Placeholder for idle
             else:
-                current_loc = str(current_loc_raw).replace('->', '-')  # Standardize
-            
+                current_loc = str(current_loc_raw).replace("-", "")  # Standardize
+
             next_node_raw = edge.get('nextNode')
-            if next_node_raw is None or next_node_raw == 'Null':
-                next_node = 'Null'  # Placeholder for idle (no next)
+            if next_node_raw is None or next_node_raw in ["Null", "null", None]:
+                next_node = "Null"  # Placeholder for idle; no next
             else:
-                next_node = str(next_node_raw).replace('->', '-')  # Standardize
-            
+                next_node = str(next_node_raw).replace("-", "")  # Standardize
+
             if next_node == "Null":  # Handle placeholder as no next node
                 continue
+
             route_key = f"{current_loc}-{next_node}"
             route_load[route_key] = route_load.get(route_key, 0) + 1
             node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
-            # Predict future loads based on ETA and finalNode with string checks
-            if 'eta' in edge and edge.get('eta') != "N/A" and next_node != "Null":
-                predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1
+
+            # FIXED: Safe get/None scrub for all node fields (get returns None if key=None, so explicit check)
+            if 'eta' in edge and edge.get('eta') != "NA" and next_node != "Null":
+                predicted_loads[next_node] += 1  # Predict arrival load
+
             if 'finalNode' in edge and 'journeyTime' in edge:
                 final_node_raw = edge.get('finalNode')
-                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "N/A" and edge['journeyTime'] < 60:  # Near-term with string checks
-                    if final_node_raw == 'Null':  # FIXED: Explicit scrub
-                        final_node_raw = 'na'
-                    final_node = str(final_node_raw).replace('->', '-')  # Standardize, safe
+                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "NA" and edge['journeyTime'] < 60:  # Near-term with string checks
+                    if final_node_raw in ["Null", None]:  # FIXED: Explicit scrub
+                        final_node_raw = "na"
+                    final_node = str(final_node_raw).replace("-", "")  # Standardize, safe
                     if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
-                        predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
-        # Dynamic congestion per route (ratio and level) - FIXED: Safe capacity (no / dict)
+                        predicted_loads[final_node] += 1  # Predict future loads based on ETA and finalNode with string checks
+
+        # Dynamic congestion per route: ratio and level
         route_congestion = {}
         for route_key, load in route_load.items():
             cap_val = route_capacities.get(route_key, 3)
             capacity = self.planner.safe_float(cap_val, 3.0)  # FIXED: Safe, prevents dict
             ratio = load / capacity if capacity > 0 else 0
-            if ratio < 0.5:
-                level = 'low'
-            elif ratio < 0.8:
-                level = 'medium'
-            else:
-                level = 'high'
-            route_congestion[route_key] = {'ratio': ratio, 'level': level}
-        # Node congestion (dynamic, assuming node capacities in graph)
+            level = "high" if ratio > 0.8 else "medium" if ratio > 0.5 else "low"
+            route_congestion[route_key] = {"ratio": ratio, "level": level}  # FIXED: Safe capacity; no dict
+
+        # Node congestion: dynamic, assuming node capacities in graph
         node_congestion = {}
         for node, load in node_loads.items():
-            capacity = graph.get(node, {}).get('capacity', 5)  # Default 5, fetch from graph if available
-            capacity = self.planner.safe_float(capacity, 5.0)  # FIXED: Safe
+            capacity_raw = graph.get(node, {}).get('capacity', 5)  # Default 5, fetch from graph if available
+            capacity = self.planner.safe_float(capacity_raw, 5.0)  # FIXED: Safe
             ratio = load / capacity if capacity > 0 else 0
-            level = 'high' if ratio > 0.8 else 'low'
-            node_congestion[node] = {'ratio': ratio, 'level': level}
+            level = "high" if ratio > 0.8 else "low"
+            node_congestion[node] = {"ratio": ratio, "level": level}
+
         # Update internal state
         self.node_loads = node_loads
         self.route_congestion = route_congestion
-        self.predicted_loads = predicted_loads
+        self.predicted_loads = predicted_loads  # Now includes sensor boosts
+
         # Optional: Generate suggestions and update edges (idle-only, like before)
         suggestions = []
         route_planner = SmartRoutePlanner(graph, blocked_nodes)
         bulk_ops = []
         for edge in edges:
-            if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
+            if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != "idle" or edge.get('task') == "idle":
                 continue  # Idle-only
-            # FIXED: Safe get + None scrub for current and destination
+
             current_node_raw = edge.get('currentLocation')
-            if current_node_raw is None or current_node_raw == 'Null':
-                current_node = 'na'
+            if current_node_raw is None or current_node_raw in ["Null", "null", None]:
+                current_node = "na"
             else:
-                current_node = str(current_node_raw).replace('->', '-')  # Standardize
-            
+                current_node = str(current_node_raw).replace("-", "")  # Standardize
+
             destination_raw = edge.get('finalNode')
-            if destination_raw is None or destination_raw == 'Null' or destination_raw == 'None' or destination_raw == 'null':
+            if destination_raw is None or destination_raw in ["None", "Null", "null", None, "null"]:
                 logger.debug(f"Skipping idle edge {edge.get('id')} with Null finalNode (no route needed)")
                 continue  # FIXED: No path computation for undefined idle
-            else:
-                destination_val = str(destination_raw).replace('->', '-')  # Standardize, safe
-                destination = destination_val
+
+            destination_val = str(destination_raw).replace("-", "")  # Standardize, safe
+            destination = destination_val
             neighbors = route_planner.get_neighbors(current_node)  # Filtered neighbors
-            # Compute intelligent path using congestion data, predictions, and blocking
-            suggested_path = route_planner.compute_path(current_node, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-            # Fallback to best single-hop if full path not computable
-            if not suggested_path or len(suggested_path) < 2:
-                best_node = "Null"
-                best_eta = "N/A"
-                min_eta = inf  # For finding the best
+
+            # FIXED: Safe get/None scrub for current and destination
+            suggested_path = route_planner.compute_path(current_node, destination, node_loads, route_congestion, predicted_loads=predicted_loads)  # Compute intelligent path using congestion data, predictions, and blocking
+
+            if not suggested_path or len(suggested_path) <= 2:
+                best_node = None
+                best_eta = "NA"
+                min_eta = float('inf')
+                # For finding the best...
                 for neighbor, dist in neighbors:
-                    neighbor = str(neighbor).replace('->', '-')  # FIXED: Safe str + standardize
+                    neighbor = str(neighbor).replace("-", "")  # FIXED: Safe str standardize
                     route_key = f"{current_node}-{neighbor}"
-                    congestion = route_congestion.get(route_key, {'ratio': 0, 'level': 'low'})
-                    if congestion['level'] == 'high':
+                    congestion = route_congestion.get(route_key, {"ratio": 0, "level": "low"})
+                    if congestion["level"] == "high":
                         continue  # Skip highly congested routes
                     speed = edge.get('speed', 10)
-                    eta = dist / speed * (1 + congestion['ratio'])  # Adjust ETA for congestion
+                    eta = dist / speed * (1 + congestion["ratio"])  # Adjust ETA for congestion
                     if eta < min_eta:
                         min_eta = eta
                         best_node = neighbor
-                # Ultimate fallback
-                if best_node == "Null" and neighbors:
+
+                # Fallback to best single-hop if full path not computable
+                if best_node is None and neighbors:
                     best_neighbor, best_dist = next(iter(neighbors))
-                    best_node = str(best_neighbor).replace('->', '-')  # FIXED: Safe str + standardize
+                    best_node = str(best_neighbor).replace("-", "")  # FIXED: Safe str standardize
                     best_eta = best_dist / edge.get('speed', 10)
+                elif min_eta != float('inf'):
+                    best_eta = min_eta
                 else:
-                    best_eta = min_eta if min_eta != inf else "N/A"
-                suggested_path = [current_node, best_node] if best_node != "Null" else None
+                    best_eta = "NA"
+                suggested_path = [current_node, best_node] if best_node is not None else None
             else:
                 best_node = suggested_path[1]
-                best_eta = sum(1 for i in range(len(suggested_path)-1)) / edge.get('speed', 10)  # Simple unit weight ETA
-            # Prepare bulk update (optional; comment out if not needed during analysis)
-            next_node_val = best_node if best_node != "Null" else "Null"
-            eta_val = best_eta if best_eta != "N/A" else "N/A"
-            bulk_ops.append(UpdateOne(  # FIXED: Use UpdateOne directly
-                {'id': edge['id']},
-                {'$set': {'nextNode': next_node_val,
-                        'eta': eta_val,
-                        'suggestedPath': suggested_path}}
-            ))
-            # Append suggestion with traffic insights
+                best_eta = sum(1 for i in range(len(suggested_path) - 1)) / edge.get('speed', 10)  # Simple unit weight ETA
+
+            # Ultimate fallback
+            next_node_val = best_node if best_node is not None else "Null"
+            eta_val = best_eta if best_eta != "NA" else "NA"
+            bulk_ops.append(UpdateOne({"id": edge["id"]}, {"$set": {"nextNode": next_node_val, "eta": eta_val, "suggestedPath": suggested_path}}))  # FIXED: Use UpdateOne directly
+
             route_key = f"{current_node}-{best_node}"
             suggestions.append({
-                'edgeId': edge['id'],
-                'currentLocation': current_node,
-                'suggestedNextNode': best_node,
-                'suggestedPath': suggested_path,
-                'eta': best_eta,
-                'congestionRatio': route_congestion.get(route_key, {'ratio': 0})['ratio'],
-                'congestionLevel': route_congestion.get(route_key, {'level': 'low'})['level'],
-                'nodeCongestionAtNext': node_congestion.get(best_node, {'level': 'low'})['level']
-            })
-        # Execute bulk updates if any (optional)
+                "edgeId": edge["id"],
+                "currentLocation": current_node,
+                "suggestedNextNode": best_node,
+                "suggestedPath": suggested_path,
+                "eta": best_eta,
+                "congestionRatio": route_congestion.get(route_key, {"ratio": 0})["ratio"],
+                "congestionLevel": route_congestion.get(route_key, {"level": "low"})["level"],
+                "nodeCongestionAtNext": node_congestion.get(best_node, {"level": "low"})["level"]
+            })  # Append suggestion with traffic insights
+
+        # Execute bulk updates if any (optional; comment out if not needed during analysis)
         if bulk_ops:
             try:
                 result = await self.db.edgeDevices.bulk_write(bulk_ops)
                 logger.debug(f"Bulk update: {result.modified_count} edges updated")
             except Exception as e:
                 logger.error(f"Bulk update failed: {e}")
+
         # Store results in DB
         await self.db.trafficData.insert_one({
-            'timestamp': datetime.utcnow(),
-            'routeLoad': route_load,
-            'nodeTraffic': node_loads,
-            'routeCongestion': route_congestion,
-            'nodeCongestion': node_congestion,
-            'predictedLoads': predicted_loads,
-            'suggestions': suggestions,
-            'triggered_by': triggered_by,
-            'anomaly_penalties': anomaly_penalties
+            "timestamp": datetime.utcnow(),
+            "routeLoad": route_load,
+            "nodeTraffic": node_loads,
+            "routeCongestion": route_congestion,
+            "nodeCongestion": node_congestion,
+            "predictedLoads": dict(predicted_loads),  # Now sensor-enhanced
+            "suggestions": suggestions,
+            "triggered_by": triggered_by,
+            "anomaly_penalties": alert_penalties  # Log sensor impacts
         })
+
         logger.info(f"Analysis complete: {len(suggestions)} suggestions generated, triggered by {triggered_by}")
 
     def get_current_loads(self):

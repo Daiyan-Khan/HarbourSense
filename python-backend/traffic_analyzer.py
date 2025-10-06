@@ -648,117 +648,88 @@ class TrafficAnalyzer:
         return dict(self.predicted_loads)
 
     async def start_mqtt_listener(self):
-        # FIXED: Use the correct method name (private underscore version)
-        await self._ensure_connected()  # Or await self.connect() if that's the public one
-        
-        # Subscribe to path updates from port.js for dynamic triggers
-        await self.mqtt_client.subscribe('harboursense/traffic/update/#')  # Wildcard for all edge updates
+        """Clean MQTT listener: Subscribe to path updates, trigger analysis/reroutes."""
+        await self._ensure_connected()  # Ensure initial connection (your TLS/client setup)
+        subscribe_topic = 'harboursense/traffic/update/#'  # Wildcard for all edge updates (e.g., /update/truck_1)
+        await self.mqtt_client.subscribe(subscribe_topic)
+        logger.info(f"MQTT listener started on {subscribe_topic}")
 
-        async for message in self.mqtt_client.messages:  # Iterate directly over messages
-            # FIXED: topic is already str - no .decode()
-            topic = message.topic
-            # FIXED: payload is bytes - decode to utf-8
-            payload_str = message.payload.decode('utf-8')
+        async for message in self.mqtt_client.messages:
             try:
-                payload = json.loads(payload_str)
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in payload: {payload_str[:100]}... Error: {e}")
-                continue
-            
-            edge_id = topic.split('/')[-1]  # Extract edgeId from topic (e.g., 'crane_1')
-            logger.info(f"Received path update from {edge_id}: remainingPath={payload.get('remainingPath', [])}")
-            
-            # Trigger analysis on path changes (e.g., arrival/empty path)
-            await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
-            
-            # Optional: Recompute and republish if path shortened (e.g., arrival detected)
-            if payload.get('remainingPath') and len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
-                start = payload.get('currentLocation', 'A1')
-                # Fetch dynamic destination from DB (set by manager during assignment)
-                edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
-                destination = edge_doc.get('finalNode') if edge_doc else 'C5'  # Use finalNode; fallback to C5
-                if destination in ['Null', None, 'null', 'None', 'undefined']:
-                    # FIXED: Scrub Null/invalid destination - fallback to C5
-                    destination = 'C5'
-                    logger.info(f"Fixed dynamic destination to {destination} for {edge_id} from DB")
-                
-                node_loads = self.get_current_loads()
-                route_congestion = self.get_route_congestions()
-                predicted_loads = self.get_predicted_loads()
-                new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-                
-                if new_path and new_path != payload.get('remainingPath', []):
-                    await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'suggestedPath': new_path, 'eta': self.estimate_eta(new_path)}))
-                    logger.info(f"Rerouted {edge_id} from {start} to {destination}: {new_path}")
-                else:
-                    logger.warning(f"No improved path for {edge_id} from {start} to {destination}")
-            else:
-                logger.debug(f"No reroute needed for {edge_id} - path length: {len(payload.get('remainingPath', []))}")
+                # FIXED: Proper aiomqtt handling - topic as str, payload decode
+                topic_str = str(message.topic)  # Topic is 'Topic' object → str (e.g., "harboursense/traffic/update/agv001")
+                payload_bytes = message.payload  # Bytes
+                payload_str = payload_bytes.decode('utf-8', errors='ignore')  # Handle any encoding issues
+                payload = json.loads(payload_str)  # Parse JSON
+                logger.debug(f"Analyzer MQTT: Topic={topic_str}, Payload sample={payload_str[:100]}...")
 
-            # Subscribe to path updates from port.js for dynamic triggers
-            await self.ensure_connected()  # Connect if needed
-            await self.mqtt_client.subscribe('harboursense/traffic/update/#')  # Wildcard for all edge updates
+                # Extract edge_id from topic (e.g., /update/agv001 → agv001)
+                topic_parts = topic_str.split('/')
+                edge_id = topic_parts[-1] if len(topic_parts) > 0 else 'unknown'
+                logger.info(f"Received path update from {edge_id}: remainingPath={payload.get('remainingPath', [])}")
 
-            async for message in self.mqtt_client.messages:  # No async with - iterate directly
-                # FIXED: topic is already str - no .decode()
-                topic = message.topic
-                # FIXED: payload is bytes - decode to utf-8
-                payload_str = message.payload.decode('utf-8')
-                payload = json.loads(payload_str)
-                
-                edge_id = topic.split('/')[-1]  # Extract edgeId from topic
-                logger.info(f"Received path update from {edge_id}: {payload.get('remainingPath', [])}")
-                
-                # Store results in DB...
+                # Always trigger full analysis on any update (metrics, loads, etc.)
                 await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
-                
-                # Optional: Recompute and republish if congestion changed significantly...
-                if len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
-                    start = payload.get('currentLocation', 'A1')
-                    # Fetch dynamic destination from DB (set by manager during assignment)
-                    edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
-                    destination = edge_doc.get('destinationNode') if edge_doc else 'B4'  # Fallback to default
-                    if destination in ['Null', None, 'null', 'None']:
-                        # FIXED: Scrub Null destination - fallback to C5
-                        destination = 'C5'
-                        logger.info(f"Fetched dynamic destination {destination} for {edge_id} from DB")
-                    
-                    node_loads = self.get_current_loads()
-                    route_congestion = self.get_route_congestions()
-                    predicted_loads = self.get_predicted_loads()
-                    new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-                    
-                    if new_path:
-                        await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'path': new_path}))
-                        logger.info(f"Rerouted and republished path to {destination} for {edge_id}")
-                    else:
-                        logger.warning(f"Failed to compute new path from {start} to {destination}")
 
-                """Subscribe to path updates from port.js for dynamic triggers"""
-                await self._ensure_connected()  # Connect if needed
-                await self.mqtt_client.subscribe("harboursense/traffic/update/#")  # Wildcard for all edge updates
-                async for message in self.mqtt_client.messages:  # No 'async with'—iterate directly
-                    topic = message.topic.decode()
-                    payload = json.loads(message.payload.decode())
-                    edge_id = topic.split('/')[-1]
-                    logger.info(f"Received path update from {edge_id}: {payload.get('remainingPath', [])}")
-                    # Trigger analysis on new path progress
-                    await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
-                    # Optional: Recompute and republish if congestion changed significantly
-                    if len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
-                        start = payload.get('currentLocation', 'A1')
-                        # DYNAMIC: Fetch destination from DB (set by manager during assignment)
-                        edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
-                        destination = edge_doc.get('destinationNode') if edge_doc else 'B4'  # Fallback to default
-                        if destination in ['Null', 'None', 'null', None]:  # FIXED: Scrub Null
+                # Reroute only if path short (e.g., <3 nodes, near end/congestion change)
+                remaining_path = payload.get('remainingPath', [])
+                if len(remaining_path) < 3:
+                    start = payload.get('currentLocation', 'A1')
+                    
+                    # Fetch dynamic finalNode from DB (scrub Nulls/invalids)
+                    edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
+                    if edge_doc:
+                        destination_raw = edge_doc.get('finalNode') or edge_doc.get('destinationNode', 'C5')
+                        # FIXED: Scrub Null/None variants
+                        if destination_raw in ['Null', None, 'null', 'None', 'undefined', '']:
                             destination = 'C5'
-                        logger.info(f"Fetched dynamic destination '{destination}' for {edge_id} from DB")
-                        node_loads = self.get_current_loads()
-                        route_congestion = self.get_route_congestion()
-                        predicted_loads = self.get_predicted_loads()
-                        new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-                        if new_path:
-                            await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'path': new_path}))
-                            logger.info(f"Rerouted and republished path to {destination} for {edge_id}")
+                            logger.debug(f"Scrubbed invalid destination for {edge_id}; fallback to {destination}")
                         else:
-                            logger.warning(f"Failed to compute new path from {start} to {destination}")
+                            destination = str(destination_raw).strip().replace('->', '-')  # Clean up
+                    else:
+                        destination = 'C5'
+                        logger.warning(f"No DB doc for {edge_id}; fallback destination {destination}")
+                    
+                    logger.debug(f"Reroute check for {edge_id}: start={start}, dest={destination}, current path len={len(remaining_path)}")
+
+                    # Get current state for computation (consistent method names)
+                    node_loads = self.get_current_loads()
+                    route_congestion = self.get_route_congestion()  # FIXED: Singular (adjust if yours is plural)
+                    predicted_loads = self.get_predicted_loads()
+                    
+                    # Compute new path
+                    new_path = self.planner.compute_path(
+                        start, destination, node_loads, route_congestion, predicted_loads=predicted_loads
+                    )
+                    
+                    if new_path and new_path != remaining_path:
+                        # Estimate ETA (add estimate_eta if missing: return (len(path)-1) / speed)
+                        edge_doc_retry = await self.db.edgeDevices.find_one({'id': edge_id})  # Re-fetch for speed
+                        edge_speed = edge_doc_retry.get('speed', 10) if edge_doc_retry else 10
+                        eta = (len(new_path) - 1) / edge_speed if len(new_path) > 1 else 0  # Hops / speed
+                        await self.mqtt_client.publish(
+                            f"harboursense/traffic/update/{edge_id}",  # FIXED: Specific topic for republish
+                            json.dumps({'suggestedPath': new_path, 'eta': eta})
+                        )
+                        logger.info(f"Rerouted {edge_id} from {start} to {destination}: {new_path} (ETA: {eta}s)")
+                    else:
+                        logger.debug(f"No improved path for {edge_id} (current: {remaining_path}; new: {new_path})")
+                else:
+                    logger.debug(f"Path sufficient for {edge_id} - len: {len(remaining_path)}")
+
+            except UnicodeDecodeError as e:
+                logger.error(f"Payload decode error on {topic_str}: {e}; raw bytes: {message.payload[:50]}...")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parse error on {topic_str}: {e}; raw: {payload_str[:100]}...")
+            except (AttributeError, IndexError) as e:
+                logger.error(f"Topic parse error ({topic_str}): {e}; skipping message")
+            except Exception as e:
+                logger.error(f"Unexpected MQTT error on {topic_str}: {e}; continuing...")
+            
+            # FIXED: Reconnect only on disconnects (not every message) - let aiomqtt handle minor issues
+            if not self.mqtt_client.is_connected():  # Assume you have this check; else add await self._ensure_connected() every 10 msgs
+                logger.warning("MQTT disconnected; attempting reconnect...")
+                await self._ensure_connected()
+                await self.mqtt_client.subscribe(subscribe_topic)  # Re-subscribe post-reconnect
+
+        logger.info("MQTT listener ended (e.g., on shutdown)")

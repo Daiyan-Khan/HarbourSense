@@ -14,3 +14,5 @@ Thumbs.db
 *.log
 .env
 .vscode
+log.txt
+manager_log.txt

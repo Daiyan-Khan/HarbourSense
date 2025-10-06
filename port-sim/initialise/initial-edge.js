@@ -2,7 +2,7 @@
 
 const { MongoClient } = require('mongodb');
 const { graphData } = require('./graph.js');  // Your graph loader for valid nodes/routes
-const devices = require('./test-edge.json');  // Load devices from test-edge.json
+const devices = require('./edge.json');  // Load devices from test-edge.json
 
 const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';
 
@@ -100,6 +100,7 @@ const initialEdges = devices.map(device => {
   const task = getRealisticTask(device.roles);
   const priority = Math.floor(Math.random() * 10) + 1;
   const eta = Math.floor(Math.random() * 16) + 5;
+  const speed = device.speed;
   return {
     id: device.id,
     desc: device.desc || 'Generic device',
@@ -115,6 +116,7 @@ const initialEdges = devices.map(device => {
     taskPhase: 'idle',
     eta:'Waiting',
     taskCompletionTime: 0,
+    speed,
     journeyTime: 0
   };
 });

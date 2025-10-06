@@ -1,5 +1,5 @@
 const { MongoClient } = require('mongodb');
-const sensorData = require('./test-sensor.json');
+const sensorData = require('./sensor.json');
 
 async function migrateSensors() {
   const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';

@@ -14,32 +14,36 @@ const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
   return <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ stroke: '#222', strokeWidth: 2 }} />;
 };
 
-// Compute device position
+// Compute device position with progress-based interpolation
 const computeDevicePosition = (device, nodePositions) => {
   if (!device || !device.currentLocation) return { x: 0, y: 0 };
 
-  const loc = device.currentLocation;
-  if (typeof loc !== 'string' || loc.trim() === '') return { x: 0, y: 0 };
+  const startNode = device.currentLocation;
+  const endNode = device.nextNode;
+  const progress = device.progressToNext || 0; // 0-100, assume numeric
 
-  // En-route device (e.g., "A1->A2")
-  if (loc.includes('->')) {
-    const [startNode, endNode] = loc.split('->');
-    const startPos = nodePositions[startNode];
-    const endPos = nodePositions[endNode];
-    if (!startPos || !endPos) return { x: 0, y: 0 };
-
+  // If not en-route (progress 0 or no nextNode), position at current location
+  if (progress <= 0 || !endNode || typeof endNode !== 'string') {
+    const nodePos = nodePositions[startNode];
+    if (!nodePos) return { x: 0, y: 0 };
     return {
-      x: (startPos.x + NODE_WIDTH / 2 + endPos.x + NODE_WIDTH / 2) / 2 - DEVICE_SIZE / 2,
-      y: (startPos.y + NODE_HEIGHT / 2 + endPos.y + NODE_HEIGHT / 2) / 2 - DEVICE_SIZE / 2,
+      x: nodePos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
+      y: nodePos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
     };
   }
 
-  // Single-node device
-  const nodePos = nodePositions[loc];
-  if (!nodePos) return { x: 0, y: 0 };
+  // En-route: Interpolate between start and end based on progress (0% = start, 100% = end)
+  const startPos = nodePositions[startNode];
+  const endPos = nodePositions[endNode];
+  if (!startPos || !endPos) return { x: 0, y: 0 };
+
+  const progressRatio = progress / 100; // 0 to 1
+  const interpolatedX = startPos.x + (endPos.x - startPos.x) * progressRatio;
+  const interpolatedY = startPos.y + (endPos.y - startPos.y) * progressRatio;
+
   return {
-    x: nodePos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
-    y: nodePos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
+    x: interpolatedX + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
+    y: interpolatedY + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
   };
 };
 
@@ -74,7 +78,11 @@ const mapDevicesToNodes = (devices, nodePositions) =>
     return {
       id: `dev-${d.id}`,
       position: pos,
-      data: { label },
+      data: { 
+        label,
+        // Optional: Add progress label for visual feedback (e.g., tooltip or badge)
+        progress: d.progressToNext ? `${Math.round(d.progressToNext)}%` : null 
+      },
       style: {
         width: DEVICE_SIZE,
         height: DEVICE_SIZE,
@@ -86,6 +94,10 @@ const mapDevicesToNodes = (devices, nodePositions) =>
         fontSize: 18,
         cursor: 'pointer',
         border: '1px solid #333',
+        // Pulse animation for moving devices (optional visual cue)
+        ...(d.progressToNext > 0 && d.progressToNext < 100 ? { 
+          boxShadow: '0 0 10px rgba(0, 123, 255, 0.5)' 
+        } : {}),
       },
       draggable: false,
     };
@@ -225,12 +237,21 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Log updates whenever liveEdges change
+  // Log updates whenever liveEdges change (optional: show every 20% progress in console)
   useEffect(() => {
     if (liveEdges.length > 0) {
       console.log('Edges updated:', {
         count: liveEdges.length,
         sample: liveEdges.slice(0, 3), // Log first 3 for brevity
+      });
+      // Log progress milestones (every 20%) for debugging/monitoring
+      liveEdges.forEach((edge) => {
+        if (edge.progressToNext && typeof edge.progressToNext === 'number') {
+          const progress = Math.round(edge.progressToNext);
+          if (progress > 0 && progress % 20 === 0) {
+            console.log(`[PROGRESS ${progress}%] ${edge.id} traveling to ${edge.nextNode}`);
+          }
+        }
       });
     }
   }, [liveEdges]);
@@ -320,6 +341,7 @@ function App() {
           <p><b>Current Location:</b> {selectedDevice.currentLocation || 'N/A'}</p>
           <p><b>Next Node:</b> {selectedDevice.nextNode || 'N/A'}</p>
           <p><b>Final Node:</b> {selectedDevice.finalNode || 'N/A'}</p>
+          <p><b>Progress to Next:</b> {selectedDevice.progressToNext ? `${Math.round(selectedDevice.progressToNext)}%` : 'N/A'}</p>
           <p><b>ETA:</b> {selectedDevice.eta ? `${selectedDevice.eta}s` : 'N/A'}</p>
           <p><b>Task Completion Time:</b> {selectedDevice.taskCompletionTime ? `${selectedDevice.taskCompletionTime}s` : 'Not Started'}</p>
           <p><b>Total Journey Time:</b> {selectedDevice.journeyTime ? `${selectedDevice.journeyTime}s` : 'N/A'}</p>

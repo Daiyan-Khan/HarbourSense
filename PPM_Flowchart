@@ -1,0 +1,27 @@
+digraph PPM_Servo_Game {
+	rankdir=TB size="8,10"
+	A [label=Start]
+	B [label="Initialize Servo (startServoPPM)"]
+	C [label="Set position = 'A'"]
+	D [label="Wait for serial input"]
+	E [label="Read word into secretWord[]"]
+	F [label="For each letter in word"]
+	G [label="servo_PPMcfg(letterIndex)"]
+	H [label="Send 50 pulses (~1s hold)"]
+	I [label="Delay 200 ms"]
+	J [label="End of word?"]
+	K [label="Display 'Done'"]
+	L [label="Loop for new word"]
+	A -> B
+	B -> C
+	C -> D
+	D -> E
+	E -> F
+	F -> G
+	G -> H
+	H -> I
+	I -> J
+	J -> K
+	K -> L
+	L -> D
+}

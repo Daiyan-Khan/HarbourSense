@@ -100,20 +100,17 @@ class SmartRoutePlanner:
                 self.flat_graph = {}
         else:
             self.flat_graph = graph or {}
-        
         # Assume flat {'A1': {'neighbors': {...}}} or {'nodes': {...}}; adapt to flat
         if 'nodes' in self.flat_graph:
             self.flat_graph = self.flat_graph['nodes']
         else:
             logger.debug("Using flat graph (no 'nodes' key)")
-        
         self.blocked = set(blocked_nodes or [])
         logger.debug(f"Graph keys sample: {list(self.flat_graph.keys())[:3]}")
 
     def get_neighbors(self, node):
         if node in self.blocked:
             return []
-        
         # Safe access to node data
         node_data = self.flat_graph.get(node, {}) if isinstance(self.flat_graph, dict) else {}
         if isinstance(node_data, str):
@@ -122,7 +119,6 @@ class SmartRoutePlanner:
             except:
                 logger.error(f"Invalid node data str for {node}")
                 return []
-        
         neighbors_dict = node_data.get('neighbors', {}) if isinstance(node_data, dict) else {}
         if isinstance(neighbors_dict, str):
             try:
@@ -130,9 +126,7 @@ class SmartRoutePlanner:
             except:
                 logger.error(f"Invalid neighbors str for {node}")
                 return []
-        
         # FIXED: Loop over items; use VALUE (data) as neighbor node, KEY (n) as direction (ignored)
-        # Assume weight=1.0 (or parse if data had 'weight', but yours is str node)
         neighbors_list = []
         if isinstance(neighbors_dict, dict):
             for n, data in neighbors_dict.items():  # n='E', data='A2'
@@ -144,54 +138,66 @@ class SmartRoutePlanner:
         logger.debug(f"Neighbors for {node}: {neighbors_list}")  # Now: [('A2', 1.0), ('B1', 1.0)]
         return neighbors_list
 
+    # FIXED: Safe float helper to prevent dict/float errors
+    def safe_float(self, val, default=0.0):
+        if isinstance(val, dict):
+            logger.warning(f"Nested dict in loads/congestion: {val}; using default {default}")
+            return default
+        try:
+            return float(val) if val is not None else default
+        except (ValueError, TypeError):
+            logger.warning(f"Invalid float {val}; using {default}")
+            return default
+
     def compute_path(self, start, end, node_loads, route_congestion, capacity_threshold=0.8, predicted_loads=None):
         if predicted_loads is None:
             predicted_loads = {}
-        
+        # FIXED: Scrub Null/None destinations (from idle edges)
+        if end in ['Null', 'null', None, 'None']:
+            logger.warning(f"Invalid end node {end} (likely idle default); fallback to 'C5'")
+            end = 'C5'
+        if start in ['Null', 'null', None, 'None']:
+            logger.warning(f"Invalid start node {start}; fallback to 'A1'")
+            start = 'A1'
         if start == end:
             return [start]
-        
         nodes = list(self.flat_graph.keys()) if isinstance(self.flat_graph, dict) else []
         if not nodes or start not in nodes or end not in nodes:
             logger.warning(f"Invalid nodes/graph for path {start} -> {end}")
             return None
-        
         distances = {node: inf for node in nodes}
         distances[start] = 0
         previous = {node: None for node in nodes}
         pq = [(0, start)]
-        
         while pq:
             dist, current = heapq.heappop(pq)
             if dist > distances[current]:
                 continue
-            
             neighbors = self.get_neighbors(current)  # List of tuples
             for neighbor, base_weight in neighbors:
                 route_key = f"{current.replace('->', '-')}-{neighbor.replace('->', '-')}"
-                
                 # Safe congestion (dict or fallback)
                 cong_val = route_congestion.get(route_key, {'ratio': 0})
-                congestion_ratio = cong_val.get('ratio', 0.0) if isinstance(cong_val, dict) else float(cong_val or 0)
-                
-                current_load = float(node_loads.get(neighbor, 0))
-                predicted_load = float(predicted_loads.get(neighbor, 0))
+                if isinstance(cong_val, dict):
+                    congestion_ratio = cong_val.get('ratio', 0.0)
+                else:
+                    congestion_ratio = self.safe_float(cong_val, 0.0)
+                # FIXED: Safe floats for loads (handles nested dicts)
+                current_load = self.safe_float(node_loads.get(neighbor, 0), 0.0)
+                predicted_load = self.safe_float(predicted_loads.get(neighbor, 0), 0.0)
                 load_factor = (current_load + predicted_load) / capacity_threshold
                 adjusted_weight = base_weight * (1 + congestion_ratio + load_factor)
-                
                 # Grid penalty (Manhattan; fixed indices)
                 grid_penalty = 0
                 sc = node_to_coords(current)
                 nc = node_to_coords(neighbor)
                 if sc and nc:
                     grid_penalty = abs(sc[0] - nc[0]) + abs(sc[1] - nc[1])
-                
                 alt = dist + adjusted_weight + grid_penalty
                 if alt < distances[neighbor]:
                     distances[neighbor] = alt
                     previous[neighbor] = current
                     heapq.heappush(pq, (alt, neighbor))
-        
         # Reconstruct path
         path = []
         current = end
@@ -199,32 +205,36 @@ class SmartRoutePlanner:
             path.append(current)
             current = previous.get(current)
         path.reverse()
-        
         if path and path[0] == start:
             logger.info(f"Path {start} -> {end}: {path} (total dist: {distances[end]:.2f})")
             return path
         else:
             logger.warning(f"No path {start} -> {end}; try greedy fallback")
-            return self._greedy_fallback(start, end, node_loads, route_congestion, predicted_loads, capacity_threshold)
-    
+            return self._greedy_fallback(start, end, node_loads, route_congestion, capacity_threshold, predicted_loads)
+
     def _greedy_fallback(self, start, end, node_loads, route_congestion, capacity_threshold=0.8, predicted_loads=None):
+        if predicted_loads is None:
+            predicted_loads = {}
         path = [start]
         current = start
         max_steps = len(self.flat_graph) * 2
         steps = 0
-        
         while current != end and steps < max_steps:
             neighbors = self.get_neighbors(current)
             if not neighbors:
                 break
-            
             # Score by adjusted weight
             def score(item):
                 n, bw = item
                 rk = f"{current.replace('->', '-')}-{n.replace('->', '-')}"
-                cr = route_congestion.get(rk, {'ratio': 0}).get('ratio', 0) if isinstance(route_congestion.get(rk), dict) else float(route_congestion.get(rk) or 0)
-                cl = float(node_loads.get(n, 0))
-                pl = float(predicted_loads.get(n, 0))
+                cr_val = route_congestion.get(rk, {'ratio': 0})
+                if isinstance(cr_val, dict):
+                    cr = cr_val.get('ratio', 0.0)
+                else:
+                    cr = self.safe_float(cr_val, 0.0)
+                # FIXED: Safe floats
+                cl = self.safe_float(node_loads.get(n, 0), 0.0)
+                pl = self.safe_float(predicted_loads.get(n, 0), 0.0)
                 lf = (cl + pl) / capacity_threshold
                 gp = 0
                 sc = node_to_coords(current)
@@ -232,27 +242,26 @@ class SmartRoutePlanner:
                 if sc and nc:
                     gp = abs(sc[0] - nc[0]) + abs(sc[1] - nc[1])
                 return bw * (1 + cr + lf) + gp
-            
             next_item = min(neighbors, key=score)
             next_node, _ = next_item
             path.append(next_node)
             current = next_node
             steps += 1
-        
         logger.info(f"Greedy path {start} -> {end}: {path}")
-        return path if path[-1] == end else None
+        return path if path[-1] == end else [start, end]  # Ultimate fallback
 
 class TrafficAnalyzer:
-    def __init__(self, db, mqtt_client, graph):  # mqtt_client is pre-connected AsyncMQTTClient
+    def __init__(self, db, mqtt_client=None, graph=None):  # mqtt_client is pre-connected AsyncMQTTClient
         self.db = db
         self.mqtt_client = mqtt_client  # Assume connected externally
         self.graph = graph
         self.node_loads = defaultdict(int)
         self.route_congestion = defaultdict(float)
         self.predicted_loads = defaultdict(int)
-        self.planner = SmartRoutePlanner(graph)
+        self.planner = SmartRoutePlanner(graph or parse_graph(GRAPH_LIST))
         # Start connection check asynchronously
-        asyncio.create_task(self._ensure_connected())
+        if self.mqtt_client:
+            asyncio.create_task(self._ensure_connected())
 
     async def _ensure_connected(self):
         """Ensure MQTT client is connected; retry if needed."""
@@ -262,7 +271,7 @@ class TrafficAnalyzer:
             try:
                 if not self.mqtt_client._connected:  # FIXED: Use internal _connected
                     await self.mqtt_client.connect()
-                    logger.info("MQTT client connected in analyzer")
+                logger.info("MQTT client connected in analyzer")
                 return
             except aiomqtt.MqttError as e:
                 retry += 1
@@ -273,11 +282,9 @@ class TrafficAnalyzer:
     async def analyze_metrics(self, triggered_by=""):
         """Restored core method: Analyze traffic from DB, update internal state, compute congestion/loads."""
         logger.info(f"Starting analysis triggered by: {triggered_by}")
-        
         # Fetch graph and capacities from MongoDB (with fallback)
         graph_doc = await self.db.graph.find_one()
         route_caps_doc = await self.db.routeCapacities.find_one()
-        
         # Use DB graph or fallback to parsed GRAPH_LIST
         if graph_doc:
             db_graph = graph_doc.get('nodes', {})
@@ -285,19 +292,14 @@ class TrafficAnalyzer:
             graph.update(db_graph)  # Merge/override
         else:
             graph = parse_graph(GRAPH_LIST)
-        
         route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
-        
         # Fetch anomalies from sensorAlerts
         anomalies = [doc async for doc in self.db.sensorAlerts.find({'alert': True})]
         anomaly_penalties = {a['node']: 5 if a['severity'] == 'high' else 2 for a in anomalies}  # Penalty scores
-        
         # Define blocked nodes (e.g., docks, non-route points) - adapt based on your graph
         blocked_nodes = ['C3', 'dock_A1', 'loading_zone']  # Example: block specific docks or areas
-        
         # Fetch edges (now including posted ETA, journeyTime, finalNode for predictions)
         edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming 'edgeDevices' collection
-        
         # Calculate current loads (single pass optimization)
         route_load = {}
         node_loads = {}
@@ -306,33 +308,44 @@ class TrafficAnalyzer:
             if not edge or not isinstance(edge, dict):  # Null/dict check
                 logger.warning("Skipping invalid edge document")
                 continue
-            
             # Idle-only check per workflow (skip if not idle)
             if edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
                 logger.debug(f"Skipping non-idle edge {edge.get('id')}: task={edge.get('task')}, phase={edge.get('taskPhase')}")
                 continue
+            # FIXED: Safe get + None scrub for all node fields (get returns None if key=None, so explicit check)
+            current_loc_raw = edge.get('currentLocation')
+            if current_loc_raw is None or current_loc_raw == 'Null':
+                current_loc = 'na'  # Placeholder for idle
+            else:
+                current_loc = str(current_loc_raw).replace('->', '-')  # Standardize
             
-            current_loc = edge.get('currentLocation', 'na').replace('->', '-')  # Standardize, safe default
-            next_node = edge.get('nextNode', "Null").replace('->', '-')  # Use string placeholder, standardize
+            next_node_raw = edge.get('nextNode')
+            if next_node_raw is None or next_node_raw == 'Null':
+                next_node = 'Null'  # Placeholder for idle (no next)
+            else:
+                next_node = str(next_node_raw).replace('->', '-')  # Standardize
+            
             if next_node == "Null":  # Handle placeholder as no next node
                 continue
-            
             route_key = f"{current_loc}-{next_node}"
             route_load[route_key] = route_load.get(route_key, 0) + 1
             node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
-            
             # Predict future loads based on ETA and finalNode with string checks
             if 'eta' in edge and edge.get('eta') != "N/A" and next_node != "Null":
-                predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1  # Arriving soon
+                predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1
             if 'finalNode' in edge and 'journeyTime' in edge:
-                if edge.get('finalNode') != "None" and edge.get('journeyTime') != "N/A" and edge['journeyTime'] < 60:  # Near-term with string checks
-                    final_node = edge.get('finalNode', 'na').replace('->', '-')  # Standardize, safe
-                    predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
-        
-        # Dynamic congestion per route (ratio and level)
+                final_node_raw = edge.get('finalNode')
+                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "N/A" and edge['journeyTime'] < 60:  # Near-term with string checks
+                    if final_node_raw == 'Null':  # FIXED: Explicit scrub
+                        final_node_raw = 'na'
+                    final_node = str(final_node_raw).replace('->', '-')  # Standardize, safe
+                    if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
+                        predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
+        # Dynamic congestion per route (ratio and level) - FIXED: Safe capacity (no / dict)
         route_congestion = {}
         for route_key, load in route_load.items():
-            capacity = route_capacities.get(route_key, 3)  # Default 3
+            cap_val = route_capacities.get(route_key, 3)
+            capacity = self.planner.safe_float(cap_val, 3.0)  # FIXED: Safe, prevents dict
             ratio = load / capacity if capacity > 0 else 0
             if ratio < 0.5:
                 level = 'low'
@@ -341,20 +354,18 @@ class TrafficAnalyzer:
             else:
                 level = 'high'
             route_congestion[route_key] = {'ratio': ratio, 'level': level}
-        
         # Node congestion (dynamic, assuming node capacities in graph)
         node_congestion = {}
         for node, load in node_loads.items():
             capacity = graph.get(node, {}).get('capacity', 5)  # Default 5, fetch from graph if available
+            capacity = self.planner.safe_float(capacity, 5.0)  # FIXED: Safe
             ratio = load / capacity if capacity > 0 else 0
             level = 'high' if ratio > 0.8 else 'low'
             node_congestion[node] = {'ratio': ratio, 'level': level}
-        
         # Update internal state
         self.node_loads = node_loads
         self.route_congestion = route_congestion
         self.predicted_loads = predicted_loads
-        
         # Optional: Generate suggestions and update edges (idle-only, like before)
         suggestions = []
         route_planner = SmartRoutePlanner(graph, blocked_nodes)
@@ -362,58 +373,59 @@ class TrafficAnalyzer:
         for edge in edges:
             if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
                 continue  # Idle-only
-            
-            current_node = edge.get('currentLocation', 'na').replace('->', '-')  # Standardize, safe
-            destination_val = edge.get('finalNode', "None").replace('->', '-')  # Use string placeholder, standardize
-            if destination_val == "None":
-                destination = current_node  # Safe default to current if placeholder
+            # FIXED: Safe get + None scrub for current and destination
+            current_node_raw = edge.get('currentLocation')
+            if current_node_raw is None or current_node_raw == 'Null':
+                current_node = 'na'
             else:
+                current_node = str(current_node_raw).replace('->', '-')  # Standardize
+            
+            destination_raw = edge.get('finalNode')
+            if destination_raw is None or destination_raw == 'Null' or destination_raw == 'None' or destination_raw == 'null':
+                logger.debug(f"Skipping idle edge {edge.get('id')} with Null finalNode (no route needed)")
+                continue  # FIXED: No path computation for undefined idle
+            else:
+                destination_val = str(destination_raw).replace('->', '-')  # Standardize, safe
                 destination = destination_val
-            
             neighbors = route_planner.get_neighbors(current_node)  # Filtered neighbors
-            
             # Compute intelligent path using congestion data, predictions, and blocking
             suggested_path = route_planner.compute_path(current_node, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-            
             # Fallback to best single-hop if full path not computable
             if not suggested_path or len(suggested_path) < 2:
                 best_node = "Null"
                 best_eta = "N/A"
                 min_eta = inf  # For finding the best
                 for neighbor, dist in neighbors:
-                    neighbor = neighbor.replace('->', '-')  # Standardize
+                    neighbor = str(neighbor).replace('->', '-')  # FIXED: Safe str + standardize
                     route_key = f"{current_node}-{neighbor}"
                     congestion = route_congestion.get(route_key, {'ratio': 0, 'level': 'low'})
                     if congestion['level'] == 'high':
                         continue  # Skip highly congested routes
-                    
                     speed = edge.get('speed', 10)
                     eta = dist / speed * (1 + congestion['ratio'])  # Adjust ETA for congestion
                     if eta < min_eta:
                         min_eta = eta
                         best_node = neighbor
-                
                 # Ultimate fallback
                 if best_node == "Null" and neighbors:
                     best_neighbor, best_dist = next(iter(neighbors))
-                    best_node = best_neighbor.replace('->', '-')  # Standardize
+                    best_node = str(best_neighbor).replace('->', '-')  # FIXED: Safe str + standardize
                     best_eta = best_dist / edge.get('speed', 10)
                 else:
                     best_eta = min_eta if min_eta != inf else "N/A"
-                
                 suggested_path = [current_node, best_node] if best_node != "Null" else None
             else:
                 best_node = suggested_path[1]
                 best_eta = sum(1 for i in range(len(suggested_path)-1)) / edge.get('speed', 10)  # Simple unit weight ETA
-            
             # Prepare bulk update (optional; comment out if not needed during analysis)
+            next_node_val = best_node if best_node != "Null" else "Null"
+            eta_val = best_eta if best_eta != "N/A" else "N/A"
             bulk_ops.append(UpdateOne(  # FIXED: Use UpdateOne directly
                 {'id': edge['id']},
-                {'$set': {'nextNode': best_node if best_node != "Null" else "Null", 
-                          'eta': best_eta if best_eta != "N/A" else "N/A", 
-                          'suggestedPath': suggested_path}}
+                {'$set': {'nextNode': next_node_val,
+                        'eta': eta_val,
+                        'suggestedPath': suggested_path}}
             ))
-            
             # Append suggestion with traffic insights
             route_key = f"{current_node}-{best_node}"
             suggestions.append({
@@ -426,7 +438,6 @@ class TrafficAnalyzer:
                 'congestionLevel': route_congestion.get(route_key, {'level': 'low'})['level'],
                 'nodeCongestionAtNext': node_congestion.get(best_node, {'level': 'low'})['level']
             })
-        
         # Execute bulk updates if any (optional)
         if bulk_ops:
             try:
@@ -434,7 +445,6 @@ class TrafficAnalyzer:
                 logger.debug(f"Bulk update: {result.modified_count} edges updated")
             except Exception as e:
                 logger.error(f"Bulk update failed: {e}")
-        
         # Store results in DB
         await self.db.trafficData.insert_one({
             'timestamp': datetime.utcnow(),
@@ -447,9 +457,186 @@ class TrafficAnalyzer:
             'triggered_by': triggered_by,
             'anomaly_penalties': anomaly_penalties
         })
-        
         logger.info(f"Analysis complete: {len(suggestions)} suggestions generated, triggered by {triggered_by}")
-        return {'status': 'analyzed', 'suggestions': suggestions, 'node_loads': dict(node_loads)}
+
+        """Restored core method: Analyze traffic from DB, update internal state, compute congestion/loads."""
+        logger.info(f"Starting analysis triggered by: {triggered_by}")
+        # Fetch graph and capacities from MongoDB (with fallback)
+        graph_doc = await self.db.graph.find_one()
+        route_caps_doc = await self.db.routeCapacities.find_one()
+        # Use DB graph or fallback to parsed GRAPH_LIST
+        if graph_doc:
+            db_graph = graph_doc.get('nodes', {})
+            graph = self.planner.flat_graph.copy()
+            graph.update(db_graph)  # Merge/override
+        else:
+            graph = parse_graph(GRAPH_LIST)
+        route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
+        # Fetch anomalies from sensorAlerts
+        anomalies = [doc async for doc in self.db.sensorAlerts.find({'alert': True})]
+        anomaly_penalties = {a['node']: 5 if a['severity'] == 'high' else 2 for a in anomalies}  # Penalty scores
+        # Define blocked nodes (e.g., docks, non-route points) - adapt based on your graph
+        blocked_nodes = ['C3', 'dock_A1', 'loading_zone']  # Example: block specific docks or areas
+        # Fetch edges (now including posted ETA, journeyTime, finalNode for predictions)
+        edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming 'edgeDevices' collection
+        # Calculate current loads (single pass optimization)
+        route_load = {}
+        node_loads = {}
+        predicted_loads = {}  # For congestion prediction
+        for edge in edges:
+            if not edge or not isinstance(edge, dict):  # Null/dict check
+                logger.warning("Skipping invalid edge document")
+                continue
+            # Idle-only check per workflow (skip if not idle)
+            if edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
+                logger.debug(f"Skipping non-idle edge {edge.get('id')}: task={edge.get('task')}, phase={edge.get('taskPhase')}")
+                continue
+            # FIXED: Safe get + None scrub for all node fields (get returns None if key=None, so explicit check)
+            current_loc_raw = edge.get('currentLocation')
+            if current_loc_raw is None or current_loc_raw == 'Null':
+                current_loc = 'na'  # Placeholder for idle
+            else:
+                current_loc = str(current_loc_raw).replace('->', '-')  # Standardize
+            
+            next_node_raw = edge.get('nextNode')
+            if next_node_raw is None or next_node_raw == 'Null':
+                next_node = 'Null'  # Placeholder for idle (no next)
+            else:
+                next_node = str(next_node_raw).replace('->', '-')  # Standardize
+            
+            if next_node == "Null":  # Handle placeholder as no next node
+                continue
+            route_key = f"{current_loc}-{next_node}"
+            route_load[route_key] = route_load.get(route_key, 0) + 1
+            node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
+            # Predict future loads based on ETA and finalNode with string checks
+            if 'eta' in edge and edge.get('eta') != "N/A" and next_node != "Null":
+                predicted_loads[next_node] = predicted_loads.get(next_node, 0) + 1
+            if 'finalNode' in edge and 'journeyTime' in edge:
+                final_node_raw = edge.get('finalNode')
+                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "N/A" and edge['journeyTime'] < 60:  # Near-term with string checks
+                    if final_node_raw == 'Null':  # FIXED: Explicit scrub
+                        final_node_raw = 'na'
+                    final_node = str(final_node_raw).replace('->', '-')  # Standardize, safe
+                    if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
+                        predicted_loads[final_node] = predicted_loads.get(final_node, 0) + 1
+        # Dynamic congestion per route (ratio and level) - FIXED: Safe capacity (no / dict)
+        route_congestion = {}
+        for route_key, load in route_load.items():
+            cap_val = route_capacities.get(route_key, 3)
+            capacity = self.planner.safe_float(cap_val, 3.0)  # FIXED: Safe, prevents dict
+            ratio = load / capacity if capacity > 0 else 0
+            if ratio < 0.5:
+                level = 'low'
+            elif ratio < 0.8:
+                level = 'medium'
+            else:
+                level = 'high'
+            route_congestion[route_key] = {'ratio': ratio, 'level': level}
+        # Node congestion (dynamic, assuming node capacities in graph)
+        node_congestion = {}
+        for node, load in node_loads.items():
+            capacity = graph.get(node, {}).get('capacity', 5)  # Default 5, fetch from graph if available
+            capacity = self.planner.safe_float(capacity, 5.0)  # FIXED: Safe
+            ratio = load / capacity if capacity > 0 else 0
+            level = 'high' if ratio > 0.8 else 'low'
+            node_congestion[node] = {'ratio': ratio, 'level': level}
+        # Update internal state
+        self.node_loads = node_loads
+        self.route_congestion = route_congestion
+        self.predicted_loads = predicted_loads
+        # Optional: Generate suggestions and update edges (idle-only, like before)
+        suggestions = []
+        route_planner = SmartRoutePlanner(graph, blocked_nodes)
+        bulk_ops = []
+        for edge in edges:
+            if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != 'idle' or edge.get('task') != 'idle':
+                continue  # Idle-only
+            # FIXED: Safe get + None scrub for current and destination
+            current_node_raw = edge.get('currentLocation')
+            if current_node_raw is None or current_node_raw == 'Null':
+                current_node = 'na'
+            else:
+                current_node = str(current_node_raw).replace('->', '-')  # Standardize
+            
+            destination_raw = edge.get('finalNode')
+            if destination_raw is None or destination_raw == 'Null' or destination_raw == 'None' or destination_raw == 'null':
+                logger.debug(f"Skipping idle edge {edge.get('id')} with Null finalNode (no route needed)")
+                continue  # FIXED: No path computation for undefined idle
+            else:
+                destination_val = str(destination_raw).replace('->', '-')  # Standardize, safe
+                destination = destination_val
+            neighbors = route_planner.get_neighbors(current_node)  # Filtered neighbors
+            # Compute intelligent path using congestion data, predictions, and blocking
+            suggested_path = route_planner.compute_path(current_node, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
+            # Fallback to best single-hop if full path not computable
+            if not suggested_path or len(suggested_path) < 2:
+                best_node = "Null"
+                best_eta = "N/A"
+                min_eta = inf  # For finding the best
+                for neighbor, dist in neighbors:
+                    neighbor = str(neighbor).replace('->', '-')  # FIXED: Safe str + standardize
+                    route_key = f"{current_node}-{neighbor}"
+                    congestion = route_congestion.get(route_key, {'ratio': 0, 'level': 'low'})
+                    if congestion['level'] == 'high':
+                        continue  # Skip highly congested routes
+                    speed = edge.get('speed', 10)
+                    eta = dist / speed * (1 + congestion['ratio'])  # Adjust ETA for congestion
+                    if eta < min_eta:
+                        min_eta = eta
+                        best_node = neighbor
+                # Ultimate fallback
+                if best_node == "Null" and neighbors:
+                    best_neighbor, best_dist = next(iter(neighbors))
+                    best_node = str(best_neighbor).replace('->', '-')  # FIXED: Safe str + standardize
+                    best_eta = best_dist / edge.get('speed', 10)
+                else:
+                    best_eta = min_eta if min_eta != inf else "N/A"
+                suggested_path = [current_node, best_node] if best_node != "Null" else None
+            else:
+                best_node = suggested_path[1]
+                best_eta = sum(1 for i in range(len(suggested_path)-1)) / edge.get('speed', 10)  # Simple unit weight ETA
+            # Prepare bulk update (optional; comment out if not needed during analysis)
+            next_node_val = best_node if best_node != "Null" else "Null"
+            eta_val = best_eta if best_eta != "N/A" else "N/A"
+            bulk_ops.append(UpdateOne(  # FIXED: Use UpdateOne directly
+                {'id': edge['id']},
+                {'$set': {'nextNode': next_node_val,
+                        'eta': eta_val,
+                        'suggestedPath': suggested_path}}
+            ))
+            # Append suggestion with traffic insights
+            route_key = f"{current_node}-{best_node}"
+            suggestions.append({
+                'edgeId': edge['id'],
+                'currentLocation': current_node,
+                'suggestedNextNode': best_node,
+                'suggestedPath': suggested_path,
+                'eta': best_eta,
+                'congestionRatio': route_congestion.get(route_key, {'ratio': 0})['ratio'],
+                'congestionLevel': route_congestion.get(route_key, {'level': 'low'})['level'],
+                'nodeCongestionAtNext': node_congestion.get(best_node, {'level': 'low'})['level']
+            })
+        # Execute bulk updates if any (optional)
+        if bulk_ops:
+            try:
+                result = await self.db.edgeDevices.bulk_write(bulk_ops)
+                logger.debug(f"Bulk update: {result.modified_count} edges updated")
+            except Exception as e:
+                logger.error(f"Bulk update failed: {e}")
+        # Store results in DB
+        await self.db.trafficData.insert_one({
+            'timestamp': datetime.utcnow(),
+            'routeLoad': route_load,
+            'nodeTraffic': node_loads,
+            'routeCongestion': route_congestion,
+            'nodeCongestion': node_congestion,
+            'predictedLoads': predicted_loads,
+            'suggestions': suggestions,
+            'triggered_by': triggered_by,
+            'anomaly_penalties': anomaly_penalties
+        })
+        logger.info(f"Analysis complete: {len(suggestions)} suggestions generated, triggered by {triggered_by}")
 
     def get_current_loads(self):
         return dict(self.node_loads)
@@ -461,34 +648,117 @@ class TrafficAnalyzer:
         return dict(self.predicted_loads)
 
     async def start_mqtt_listener(self):
-        """Subscribe to path updates from port.js for dynamic triggers"""
-        await self._ensure_connected()  # Connect if needed
-        await self.mqtt_client.subscribe("harboursense/traffic/update/#")  # Wildcard for all edge updates
+        # FIXED: Use the correct method name (private underscore version)
+        await self._ensure_connected()  # Or await self.connect() if that's the public one
         
-        async for message in self.mqtt_client.messages:  # No 'async with'—iterate directly
-            topic = message.topic.decode()
-            payload = json.loads(message.payload.decode())
-            edge_id = topic.split('/')[-1]
-            logger.info(f"Received path update from {edge_id}: {payload.get('remainingPath', [])}")
+        # Subscribe to path updates from port.js for dynamic triggers
+        await self.mqtt_client.subscribe('harboursense/traffic/update/#')  # Wildcard for all edge updates
+
+        async for message in self.mqtt_client.messages:  # Iterate directly over messages
+            # FIXED: topic is already str - no .decode()
+            topic = message.topic
+            # FIXED: payload is bytes - decode to utf-8
+            payload_str = message.payload.decode('utf-8')
+            try:
+                payload = json.loads(payload_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in payload: {payload_str[:100]}... Error: {e}")
+                continue
             
-            # Trigger analysis on new path progress
+            edge_id = topic.split('/')[-1]  # Extract edgeId from topic (e.g., 'crane_1')
+            logger.info(f"Received path update from {edge_id}: remainingPath={payload.get('remainingPath', [])}")
+            
+            # Trigger analysis on path changes (e.g., arrival/empty path)
             await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
             
-            # Optional: Recompute and republish if congestion changed significantly
-            if len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
+            # Optional: Recompute and republish if path shortened (e.g., arrival detected)
+            if payload.get('remainingPath') and len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
                 start = payload.get('currentLocation', 'A1')
-                
-                # DYNAMIC: Fetch destination from DB (set by manager during assignment)
+                # Fetch dynamic destination from DB (set by manager during assignment)
                 edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
-                destination = edge_doc.get('destinationNode') if edge_doc else 'B4'  # Fallback to default
-                logger.info(f"Fetched dynamic destination '{destination}' for {edge_id} from DB")
+                destination = edge_doc.get('finalNode') if edge_doc else 'C5'  # Use finalNode; fallback to C5
+                if destination in ['Null', None, 'null', 'None', 'undefined']:
+                    # FIXED: Scrub Null/invalid destination - fallback to C5
+                    destination = 'C5'
+                    logger.info(f"Fixed dynamic destination to {destination} for {edge_id} from DB")
                 
                 node_loads = self.get_current_loads()
-                route_congestion = self.get_route_congestion()
+                route_congestion = self.get_route_congestions()
                 predicted_loads = self.get_predicted_loads()
                 new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
-                if new_path:
-                    await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'path': new_path}))
-                    logger.info(f"Rerouted and republished path to {destination} for {edge_id}")
+                
+                if new_path and new_path != payload.get('remainingPath', []):
+                    await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'suggestedPath': new_path, 'eta': self.estimate_eta(new_path)}))
+                    logger.info(f"Rerouted {edge_id} from {start} to {destination}: {new_path}")
                 else:
-                    logger.warning(f"Failed to compute new path from {start} to {destination}")
+                    logger.warning(f"No improved path for {edge_id} from {start} to {destination}")
+            else:
+                logger.debug(f"No reroute needed for {edge_id} - path length: {len(payload.get('remainingPath', []))}")
+
+            # Subscribe to path updates from port.js for dynamic triggers
+            await self.ensure_connected()  # Connect if needed
+            await self.mqtt_client.subscribe('harboursense/traffic/update/#')  # Wildcard for all edge updates
+
+            async for message in self.mqtt_client.messages:  # No async with - iterate directly
+                # FIXED: topic is already str - no .decode()
+                topic = message.topic
+                # FIXED: payload is bytes - decode to utf-8
+                payload_str = message.payload.decode('utf-8')
+                payload = json.loads(payload_str)
+                
+                edge_id = topic.split('/')[-1]  # Extract edgeId from topic
+                logger.info(f"Received path update from {edge_id}: {payload.get('remainingPath', [])}")
+                
+                # Store results in DB...
+                await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
+                
+                # Optional: Recompute and republish if congestion changed significantly...
+                if len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
+                    start = payload.get('currentLocation', 'A1')
+                    # Fetch dynamic destination from DB (set by manager during assignment)
+                    edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
+                    destination = edge_doc.get('destinationNode') if edge_doc else 'B4'  # Fallback to default
+                    if destination in ['Null', None, 'null', 'None']:
+                        # FIXED: Scrub Null destination - fallback to C5
+                        destination = 'C5'
+                        logger.info(f"Fetched dynamic destination {destination} for {edge_id} from DB")
+                    
+                    node_loads = self.get_current_loads()
+                    route_congestion = self.get_route_congestions()
+                    predicted_loads = self.get_predicted_loads()
+                    new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
+                    
+                    if new_path:
+                        await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'path': new_path}))
+                        logger.info(f"Rerouted and republished path to {destination} for {edge_id}")
+                    else:
+                        logger.warning(f"Failed to compute new path from {start} to {destination}")
+
+                """Subscribe to path updates from port.js for dynamic triggers"""
+                await self._ensure_connected()  # Connect if needed
+                await self.mqtt_client.subscribe("harboursense/traffic/update/#")  # Wildcard for all edge updates
+                async for message in self.mqtt_client.messages:  # No 'async with'—iterate directly
+                    topic = message.topic.decode()
+                    payload = json.loads(message.payload.decode())
+                    edge_id = topic.split('/')[-1]
+                    logger.info(f"Received path update from {edge_id}: {payload.get('remainingPath', [])}")
+                    # Trigger analysis on new path progress
+                    await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
+                    # Optional: Recompute and republish if congestion changed significantly
+                    if len(payload.get('remainingPath', [])) < 3:  # Threshold for reroute
+                        start = payload.get('currentLocation', 'A1')
+                        # DYNAMIC: Fetch destination from DB (set by manager during assignment)
+                        edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
+                        destination = edge_doc.get('destinationNode') if edge_doc else 'B4'  # Fallback to default
+                        if destination in ['Null', 'None', 'null', None]:  # FIXED: Scrub Null
+                            destination = 'C5'
+                        logger.info(f"Fetched dynamic destination '{destination}' for {edge_id} from DB")
+                        node_loads = self.get_current_loads()
+                        route_congestion = self.get_route_congestion()
+                        predicted_loads = self.get_predicted_loads()
+                        new_path = self.planner.compute_path(start, destination, node_loads, route_congestion, predicted_loads=predicted_loads)
+                        if new_path:
+                            await self.mqtt_client.publish(f"harboursense/traffic/{edge_id}", json.dumps({'path': new_path}))
+                            logger.info(f"Rerouted and republished path to {destination} for {edge_id}")
+                        else:
+                            logger.warning(f"Failed to compute new path from {start} to {destination}")

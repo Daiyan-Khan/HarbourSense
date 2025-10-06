@@ -70,6 +70,10 @@ const mapDevicesToNodes = (devices, nodePositions) =>
       label = '🤖';
       background = 'lightgreen';
       borderRadius = '50%';
+    } else if (deviceType.includes('crane')) {
+      label = '🅰️';  // Crane icon approximation
+      background = 'darkblue';
+      borderRadius = '50%';
     }
 
     // Devices without type get a warning icon
@@ -96,7 +100,7 @@ const mapDevicesToNodes = (devices, nodePositions) =>
         border: '1px solid #333',
         // Pulse animation for moving devices (optional visual cue)
         ...(d.progressToNext > 0 && d.progressToNext < 100 ? { 
-          boxShadow: '0 0 10px rgba(0, 123, 255, 0.5)' 
+         boxShadow: '0 0 10px rgba(0, 123, 255, 0.5)' 
         } : {}),
       },
       draggable: false,
@@ -336,7 +340,12 @@ function App() {
           <h3>Device Details</h3>
           <p><b>Name:</b> {selectedDevice.id}</p>
           <p><b>Description:</b> {selectedDevice.desc || 'N/A'}</p>
-          <p><b>Task:</b> {selectedDevice.task || 'N/A'}</p>
+          {/* FIXED: Handle task as object - show phase/task summary or stringify */}
+          <p><b>Task:</b> {selectedDevice.task 
+            ? (typeof selectedDevice.task === 'object' 
+                ? `${selectedDevice.task.phase || 'unknown'} - ${selectedDevice.task.task || 'N/A'} (Shipment: ${selectedDevice.task.shipmentId || 'N/A'})` 
+                : selectedDevice.task) 
+            : 'N/A'}</p>
           <p><b>Priority:</b> {selectedDevice.prio || selectedDevice.priority || 'N/A'}</p>
           <p><b>Current Location:</b> {selectedDevice.currentLocation || 'N/A'}</p>
           <p><b>Next Node:</b> {selectedDevice.nextNode || 'N/A'}</p>

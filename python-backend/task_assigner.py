@@ -268,7 +268,7 @@ class TaskAssigner:
         next_node = path[1] if len(path) > 1 else final_node
         eta = 0 if device_loc == required_place else len(path) / edge.get('speed', 10)  # 0 if no go-to needed
         updates = {
-            'taskPhase': 'enroute_start' if device_loc != required_place else 'assigned',  # FIXED: Enroute for go-to; assigned if at place
+            'taskPhase': 'en_route_start' if device_loc != required_place else 'assigned',  # FIXED: Enroute for go-to; assigned if at place
             'finalNode': final_node,
             'path': path,
             'nextNode': next_node,

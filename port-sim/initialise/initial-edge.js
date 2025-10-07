@@ -4,11 +4,21 @@ const { MongoClient } = require('mongodb');
 const { graphData } = require('./graph.js');  // Your graph loader for valid nodes/routes
 const devices = require('./test-edge.json');  // Load devices from test-edge.json
 
-const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';
+const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net/';
 
 // Helper: Get random node from graph
 function getRandomNode() {
   return graphData[Math.floor(Math.random() * graphData.length)].id;
+}
+
+// NEW: Get all dock/berth nodes from graphData (types: 'dock' or 'berth' for offloading points)
+function getDocks() {
+  const docks = graphData
+    .filter(node => node.type === 'dock' || node.type === 'berth')  // Adjust types if needed (e.g., add 'loading_zone')
+    .map(node => node.id)
+    .sort();  // Consistent order (e.g., A1, C3, E4)
+  console.log(`Detected docks/berths: [${docks.join(', ')}] (${docks.length} total)`);
+  return docks;
 }
 
 // Helper: Remove consecutive duplicate nodes from a path array
@@ -30,7 +40,7 @@ function removeConsecutiveDuplicates(path) {
 
 // Helper: Get a random valid path (startNode, next, final) based on graph
 function getRandomPath(type) {
-  // For static types, no path - just a random start
+  // For static types, no path - just a random start (overridden for cranes below)
   if (type === 'crane' || type === 'conveyor') {
     const start = getRandomNode();
     return { startNode: start, next: "null", final: "null", path: [] };
@@ -93,8 +103,40 @@ function getRealisticTask(roles) {
   return 'idle';
 }
 
+// NEW: Assign cranes to docks (one per dock if possible)
+function assignCranesToDocks(initialEdges, docks) {
+  const cranes = initialEdges.filter(edge => edge.type === 'crane');
+  console.log(`Assigning ${cranes.length} cranes to ${docks.length} docks...`);
+
+  if (cranes.length === 0 || docks.length === 0) return initialEdges;
+
+  // Shuffle cranes for random assignment (or keep order)
+  const shuffledCranes = [...cranes].sort(() => Math.random() - 0.5);
+  let dockIndex = 0;
+
+  shuffledCranes.forEach((crane, index) => {
+    const assignedDock = docks[dockIndex % docks.length];  // Cycle through docks
+    crane.currentLocation = assignedDock;
+    crane.nextNode = 'Null';  // Stationary
+    crane.finalNode = 'None';  // Stationary
+    crane.path = [];  // No path
+
+    console.log(`Assigned crane ${crane.id} to dock: ${assignedDock} (dock ${dockIndex + 1}/${docks.length})`);
+    dockIndex++;
+
+    // Ensure at least one per dock: If more cranes, extras to random docks
+    if (index >= docks.length) {
+      const randomDock = docks[Math.floor(Math.random() * docks.length)];
+      crane.currentLocation = randomDock;
+      console.log(`Extra crane ${crane.id} assigned to random dock: ${randomDock}`);
+    }
+  });
+
+  return initialEdges;
+}
+
 // Generate initial edges
-const initialEdges = devices.map(device => {
+let initialEdges = devices.map(device => {
   const type = device.id.match(/^[a-z]+/) ? device.id.match(/^[a-z]+/)[0] : 'unknown';
   const pathObj = getRandomPath(type);
   const task = getRealisticTask(device.roles);
@@ -110,16 +152,21 @@ const initialEdges = devices.map(device => {
     task: 'idle',
     priority,
     nextNode: 'Null',        // string "null" instead of null
-    finalNode: 'None',      // string "null" instead of null
+    finalNode: 'None',       // string "null" instead of null
     startNode: pathObj.startNode,
     path: [],
     taskPhase: 'idle',
-    eta:'Waiting',
+    eta: 'Waiting',
     taskCompletionTime: 0,
+    shipmentId: "Null",
     speed,
     journeyTime: 0
   };
 });
+
+// NEW: Assign cranes to docks after initial generation
+const docks = getDocks();
+initialEdges = assignCranesToDocks(initialEdges, docks);
 
 async function storeInitialEdges() {
   const client = new MongoClient(uri);
@@ -127,9 +174,9 @@ async function storeInitialEdges() {
     await client.connect();
     const db = client.db('port');
     const edgesColl = db.collection('edgeDevices');
-    await edgesColl.deleteMany({});
+    await edgesColl.deleteMany({});  // Clear existing
     const result = await edgesColl.insertMany(initialEdges);
-    console.log(`Inserted ${result.insertedCount} initial edges with string "null" values.`);
+    console.log(`Inserted ${result.insertedCount} initial edges with cranes at docks (e.g., crane001 at ${docks[0] || 'N/A'}).`);
   } catch (error) {
     console.error('Error storing initial edges:', error);
   } finally {

@@ -138,7 +138,6 @@ class TaskAssigner:
         logger.debug(f"Manhattan dist {node1} ({x1},{y1}) to {node2} ({x2},{y2}) = {dist}")
         return dist
 
-
     def _nearest_warehouse(self, from_node):
         """Find nearest warehouse to from_node (dynamic for multi-warehouses)."""
         warehouses = [n for n, g in self.graph.items() if g.get('type') == 'warehouse']  # B4, D2, E5
@@ -298,6 +297,7 @@ class TaskAssigner:
             'finalNode': final_node,
             'path': path,
             'nextNode': next_node,
+            'path' : path,
             'eta': eta,
             'task': full_details,
             'updatedAt': datetime.now()
@@ -326,223 +326,126 @@ class TaskAssigner:
         logger.info(f"Dynamic assign {device_type} {edge_id} ({phase}) for {shipment_id}: {device_loc}->{final_node} (via {required_place}), path={path}")
         return edge_id
 
-    async def _assign_stage_device(self, shipment_id, phase, task_details, edge_id=None):
-        """Core: Assign by phase, dynamic nodes/types. UPDATED: Integrated path compute/validate (stationary fallback); safe None/loads; occ inc on store."""
-        try:
-            shipment = await self.db.shipments.find_one({'id': shipment_id})
-            if not shipment:
-                logger.warning(f"Shipment {shipment_id} not found")
-                return None
-
-            assigned_edges = shipment.get('assignedEdges', [])
-            if any(phase in entry for entry in assigned_edges):
-                logger.debug(f"{shipment_id} already {phase}; skip")
-                return None
-
-            # UPDATED: Safe shipment fields (None → defaults)
-            current_node = shipment.get('currentNode', 'A1')
-            if current_node is None:
-                current_node = 'A1'
-                logger.debug(f"Fixed None currentNode to 'A1' for {shipment_id}")
-            destination = shipment.get('destination', self._nearest_warehouse(current_node))
-            if destination is None:
-                destination = self._nearest_warehouse(current_node)
-                logger.debug(f"Fixed None destination to {destination} for {shipment_id}")
-
-            # Device type map (existing, for truck_tempo etc.)
-            device_type_map = {
-                'offload': 'crane' if self._is_dock_or_berth(current_node) else 'agv',
-                'transport': 'truck_tempo',  # Assumes DB has idle truck_tempo at A1/B1
-                'store_move': 'robot',       # Sub for haul to rack
-                'store_load': 'forklift',    # Sub for placement
-                'delivery': 'truck_delivery', # From warehouse to E5
-                'berth_unload': 'agv'
-            }
-            device_type = device_type_map.get(phase, 'truck')
-            task_details['phase'] = phase
-
-            # Dynamic task_details (start from current, final per phase)
-            task_details['startNode'] = current_node
-
-            # UPDATED: Define required_place/finalNode with safe wh load check (for prioritization)
-            def safe_warehouse_load(wh_id):
-                """Helper: Avoid None in load/cap."""
-                wh_data = self.graph.get(wh_id, {})
-                occ = wh_data.get('currentOccupancy', 0)
-                if occ is None:
-                    occ = 0
-                    logger.debug(f"Fixed None occ for {wh_id} to 0")
-                pred = self.analyzer.get_predicted_load(wh_id) if self.analyzer else 0
-                if pred is None:
-                    pred = 0
-                    logger.debug(f"Fixed None pred for {wh_id} to 0")
-                total = int(occ) + int(pred)
-                cap = wh_data.get('capacity', 35)
-                if cap is None:
-                    cap = 35
-                    logger.debug(f"Fixed None cap for {wh_id} to 35")
-                load_pct = total / cap if cap > 0 else 0.0  # Safe / 
-                return total, cap, load_pct
-
-            if phase == 'offload':
-                required_place = shipment.get('arrivalNode', current_node) or current_node  # Dock A1
-                task_details['finalNode'] = required_place  # Stationary
-                logger.debug(f"Offload: stationary at {required_place}")
-            elif phase == 'transport':
-                required_place = current_node  # Dock A1 pickup
-                task_details['finalNode'] = destination  # e.g., B4 (check load <80%)
-                wh_total, wh_cap, wh_pct = safe_warehouse_load(destination)
-                if wh_pct > 0.8:
-                    logger.warning(f"High load {wh_pct:.1%} at {destination}; reselect low-load wh")
-                    destination = await self._select_warehouse(current_node, shipment_id)  # Dynamic
-                    task_details['finalNode'] = destination
-                logger.debug(f"Transport: {required_place} → {task_details['finalNode']} (load {wh_total}/{wh_cap} = {wh_pct:.1%})")
-            elif phase in ['store_move', 'store_load'] or phase == 'store':  # Handle sub/composite
-                required_place = destination  # Warehouse B4
-                task_details['pickupNode'] = required_place if phase == 'store_load' else current_node
-                task_details['finalNode'] = required_place  # Stationary store
-                wh_total, wh_cap, wh_pct = safe_warehouse_load(destination)
-                if wh_total >= wh_cap:
-                    logger.warning(f"Full {wh_pct:.1%} at {destination}; queue store for {shipment_id}")
-                    await self.db.shipments.update_one({'id': shipment_id}, {'$set': {'storeQueued': True}})
-                    return None
-                logger.debug(f"Store ({phase}): stationary at {required_place} (load {wh_total}/{wh_cap})")
-            elif phase == 'delivery':
-                required_place = destination  # Warehouse pickup
-                task_details['finalNode'] = 'E5'  # Exit
-                task_details['pickupNode'] = required_place
-                logger.debug(f"Delivery: {required_place} → E5")
-            else:
-                required_place = current_node
-                task_details['finalNode'] = destination or 'B4'
-
-            # Add to task_details
-            task_details['requiredPlace'] = required_place
-            logger.debug(f"{phase} for {shipment_id}: type={device_type}, required_place={required_place}, final={task_details['finalNode']}, dest={destination}")
-
-            # UPDATED: Path computation/validation (integrate here; skip in assign_task)
-            # Fetch candidates (idle by type)
-            candidates = []
-            edges = await self.db.edgeDevices.find({'type': device_type, 'taskPhase': 'idle'}).to_list(None)
-            for edge in edges:
-                device_loc = edge.get('currentLocation', 'A1')
-                if device_loc is None:
-                    device_loc = 'A1'
-                    logger.debug(f"Fixed None loc to 'A1' for {edge['id']}")
-                # Proximity sort (dist to required_place)
-                dist = self._manhattan_distance(device_loc, required_place)
-                candidates.append((edge['id'], dist))
-            candidates.sort(key=lambda x: x[1])  # Nearest first
-
-            assigned = None
-            for edge_id, dist in candidates:
-                try:
-                    edge = await self.db.edgeDevices.find_one({'id': edge_id})
-                    if not edge or edge.get('taskPhase') != 'idle':
-                        continue
-
-                    device_loc = edge.get('currentLocation', 'A1')
-                    start_node = task_details.get('startNode', device_loc)
-                    goal_node = task_details.get('finalNode', required_place)
-
-                    # Compute path (stationary or planner)
-                    if start_node == goal_node:
-                        path = [start_node]
-                        eta = 5  # Fixed time for stationary (offload/store)
-                        logger.debug(f"Stationary {phase} for {edge_id} at {start_node}; path=[{start_node}], ETA={eta}s")
-                    else:
-                        path = self.analyzer.planner.compute_path(start_node, goal_node) if self.analyzer and self.analyzer.planner else self._a_star_fallback(start_node, goal_node)
-                        if not path:
-                            path = [start_node, goal_node]  # Direct fallback
-                            logger.warning(f"Empty path {start_node}→{goal_node}; direct fallback")
-                        
-                        # Validate/adjust
-                        if path and path[0] != device_loc:
-                            if device_loc in path:
-                                idx = path.index(device_loc)
-                                path = path[idx:]
-                            else:
-                                path = [device_loc] + path
-                                logger.debug(f"Prepended {device_loc} to path for {edge_id}")
-                        
-                        if not path or len(path) < 1:
-                            path = [device_loc]
-                            eta = 0
-                            logger.warning(f"Forced stationary path [{device_loc}] for {edge_id}")
-                        else:
-                            # Neighbor check
-                            valid_path = True
-                            for i in range(len(path) - 1):
-                                if path[i+1] not in self.graph.get(path[i], {}).get('neighbors', {}):
-                                    logger.error(f"Invalid {path[i]}→{path[i+1]}; truncating path")
-                                    path = path[:i+1]
-                                    valid_path = False
-                                    break
-                            if not valid_path:
-                                eta = self._calculate_eta(edge, path[:i+1], phase)
-                            else:
-                                eta = self._calculate_eta(edge, path, phase)  # Speed-based
-
-                    # If valid, assign
-                    if path:  # Now always true post-fallback
-                        # Update edge DB (task, path, eta)
-                        await self.db.edgeDevices.update_one(
-                            {'id': edge_id},
-                            {'$set': {
-                                'taskPhase': 'assigned',
-                                'task': f"{phase}:{shipment_id}",
-                                'path': path,
-                                'eta': eta,
-                                'assignedShipment': shipment_id,
-                                'updatedAt': datetime.now()
-                            }}
-                        )
-                        # FIXED: Combined operators for shipment update
-                        await self.db.shipments.update_one(
-                            {'id': shipment_id},
-                            {
-                                '$push': {'assignedEdges': f"{edge_id}:{phase}"},
-                                '$set': {'nextPhase': self._next_phase(phase),  # e.g., offload → transport
-                                        'updatedAt': datetime.now()}
-                            }
-                        )
-                        # UPDATED: Inc warehouse occ if store/delivery pickup
-                        if phase in ['store_move', 'store_load', 'delivery'] and destination:
-                            wh_total, _, _ = safe_warehouse_load(destination)
-                            await self.db.graph.update_one({'id': destination}, {'$inc': {'currentOccupancy': 1}})
-                            logger.debug(f"Inc occ to {wh_total + 1} at {destination} post-{phase}")
-
-                        # Publish MQTT task
-                        await self.mqtt_client.publish(
-                            f"harboursense/edges/{edge_id}/task",
-                            json.dumps({
-                                'shipmentId': shipment_id,
-                                'phase': phase,
-                                'path': path,
-                                'eta': eta,
-                                'requiredPlace': required_place
-                            })
-                        )
-                        logger.info(f"Assigned {edge_id} ({device_type}) for {phase} on {shipment_id}: path={path}, ETA={eta}s, dist={dist}")
-                        assigned = edge_id
-                        break  # First valid
-
-                except Exception as e:
-                    logger.warning(f"Assign failed for {edge_id} ({phase}): {e}; next candidate")
-
-            if not assigned:
-                # Queue
-                queued_key = f"{phase}Queued"
-                await self.db.shipments.update_one({'id': shipment_id}, {'$set': {queued_key: True}})
-                logger.warning(f"No idle {device_type} for {shipment_id} {phase}; queued ({len(candidates)} candidates checked)")
-
-            return assigned
+    async def _assign_stage_device(self, shipment_id, phase, details):
+        """Assign nearest idle device for phase; compute path with loads/congestion if mobile. FIXED: Pass node_loads/route_congestion to compute_path; offload=crane (no path); try/except per candidate."""
+        logger.info(f"Assigning {phase} for {shipment_id}: {details}")
         
+        # Device type mapping (distinctions: tempo vs delivery trucks; robot/forklift stages)
+        device_type_map = {
+            'offload': 'crane',      # Stationary at dock (A1/A2); no path
+            'transport': 'truck_tempo',  # Dock → wh
+            'delivery': 'truck_delivery',  # Wh → E5 exit
+            'store_move': 'robot',   # Wh internal move
+            'store_load': 'forklift' # Wh place + occ inc
+        }
+        device_type = device_type_map.get(phase, 'agv')  # Fallback AGV for unknown
+        
+        required_place = details.get('destNode') or details.get('startNode') or details.get('pickupNode') or 'A1'
+        start_node = details.get('startNode') or required_place
+        final_node = details.get('finalNode')
+        
+        # Get current/traffic data (safe dicts; empty if analyzer None)
+        node_loads = self.analyzer.get_current_loads() if self.analyzer else {}
+        route_congestion = self.analyzer.get_route_congestion() if self.analyzer else {}
+        predicted_loads = self.analyzer.get_predicted_loads() if self.analyzer else {}
+        
+        candidates = []
+        try:
+            # Scan idle devices of type (add location filter if needed, e.g., near wh for store)
+            query = {'taskPhase': 'idle', 'type': device_type}
+            if phase == 'offload': query['currentLocation'] = {'$in': ['A1', 'A2', 'A3']}  # Dock cranes only
+            elif phase == 'delivery': query['currentLocation'] = {'$in': ['B4', 'D2', 'E5']}  # Wh trucks
+            elif 'store' in phase: query['currentLocation'] = {'$in': ['B4', 'D2', 'E5']}  # Robots/forklifts at wh
+            
+            idle_devices = await self.db.edgeDevices.find(query).to_list(None)
+            logger.debug(f"Found {len(idle_devices)} idle {device_type} for {phase} near {required_place}")
+            
+            for device in idle_devices:
+                try:
+                    device_id = device['id']
+                    current_loc = device.get('currentLocation', start_node)
+                    dist = self._manhattan_distance(current_loc, required_place)
+                    
+                    # Path if mobile + final_node (crane offload: no path, stationary)
+                    path = None
+                    if final_node and device_type != 'crane':  # Skip path for stationary offload
+                        path = SmartRoutePlanner.compute_path(
+                            start_node, final_node, 
+                            node_loads, route_congestion, 
+                            predicted_loads=predicted_loads  # Optional
+                        )
+                        if not path or len(path) < 2:
+                            logger.warning(f"Invalid path for {device_id} {start_node}→{final_node}; skip candidate")
+                            continue
+                        dist += sum(self._edge_weight(p) for p in path[1:])  # Optional: Path cost add
+                    else:
+                        path = [start_node, final_node] if final_node else [required_place]  # Simple for stationary
+                    
+                    candidates.append((device_id, dist, path, device))
+                    logger.debug(f"Candidate {device_id} at {current_loc}: dist={dist}, path={path[:3]}...")
+                    
+                except Exception as e:
+                    logger.warning(f"Path/assign fail for candidate {device.get('id', 'unknown')}: {e}; next")
+                    continue
+            
+            if candidates:
+                # Nearest (min dist)
+                nearest_id, _, best_path, nearest_device = min(candidates, key=lambda x: x[1])
+                logger.info(f"Assigned nearest {device_type} {nearest_id} for {shipment_id} {phase} (dist={candidates[0][1]:.1f})")
+                
+                # Update edge (set path, task, shipment)
+                task = {
+                    'shipmentId': shipment_id,
+                    'phase': phase,
+                    'path': best_path,
+                    'startNode': start_node,
+                    'finalNode': final_node,
+                    'subPhase': details.get('subPhase'),
+                    'requiredPlace': required_place,
+                    'assignedAt': datetime.now()
+                }
+                update_data = {
+                    '$set': {
+                        'taskPhase': 'assigned',
+                        'shipmentId': shipment_id,
+                        'assignedShipment': shipment_id,
+                        'task': task,
+                        'path': best_path,
+                        'currentLocation': start_node,  # Sync start
+                        'updatedAt': datetime.now()
+                    }
+                }
+                await self.db.edgeDevices.update_one({'id': nearest_id}, update_data)
+                
+                # Publish to MQTT for sim/UI (edge start)
+                if self.mqtt_client:
+                    await self.mqtt_client.publish(
+                        f"harboursense/edge/assign/{nearest_id}",
+                        json.dumps({'device': nearest_id, 'task': task, 'shipment': shipment_id})
+                    )
+                
+                # Add to shipment edges
+                edge_str = f"{nearest_id}:{phase}"
+                await self.db.shipments.update_one(
+                    {'id': shipment_id},
+                    {'$push': {'assignedEdges': edge_str}, '$set': {'updatedAt': datetime.now()}}
+                )
+                return nearest_id
+            
+            else:
+                logger.warning(f"No valid {device_type} candidates for {shipment_id} {phase} ({len(idle_devices)} idle checked); queue")
+                queued_key = f"{phase}Queued"
+                await self.db.shipments.update_one({'id': shipment_id}, {'$set': {queued_key: True, 'updatedAt': datetime.now()}})
+                return None
+                
         except Exception as e:
             logger.error(f"Unexpected error in _assign_stage_device for {shipment_id} {phase}: {e}")
-            # Optional: Set global queue flag
-            await self.db.shipments.update_one({'id': shipment_id}, {'$set': {f"{phase}Error": str(e)[:100]}}, upsert=True)
             return None
+
+    def _edge_weight(self, edge_node):
+        """Optional: Weight for path cost (e.g., type-based slowdown); default 1.0."""
+        node = self.graph.get(edge_node, {})
+        return node.get('weight', 1.0) or 1.0
 
     def _next_phase(self, current_phase):
         """Helper: Chain phases (offload → transport, transport → store_move, etc.)."""
@@ -584,127 +487,51 @@ class TaskAssigner:
 
     
 
-    async def handle_completion(self, device_id, task_payload):
-        """Reset on complete; update shipment status based on phase/node."""
-        edge = await self.db.edgeDevices.find_one({'id': device_id})
-        if not edge:
-            logger.warning(f"No edge found for {device_id}; skipping completion")
-            return
-
-        # Extract key fields from task_payload to avoid recursion
-        shipment_id = task_payload.get('shipmentId') or edge.get('assignedShipment')
-        phase = task_payload.get('phase', 'unknown')
-        current_node = edge.get('currentLocation', 'A1')
-        new_status = {
-            'offload': 'offloaded', 
-            'transport': 'transported', 
-            'store_move': 'storing',      # NEW: Sub-phase for robot haul
-            'store_load': 'stored',       # NEW: Sub-phase for forklift placement
-            'delivery': 'completed'
-        }.get(phase, 'completed')
-
-        # Reset edge fully, including shipment links
-        await self.db.edgeDevices.update_one(
-            {'id': device_id},
-            {'$set': {
-                'taskPhase': 'idle' if phase != 'delivery' else 'returning',  # NEW: 'returning' for delivery trucks
-                'task': 'idle',
-                'path': [],
-                'finalNode': None,
-                'nextNode': None,
-                'shipmentId': None,
-                'assignedShipment': None,
-                'updatedAt': datetime.now()
-            }}
-        )
-        logger.info(f"Reset edge {device_id} to {'idle' if phase != 'delivery' else 'returning'} at {current_node}")
-
-        # Update shipment if linked
-        if shipment_id:
-            update_data = {
-                'status': new_status,
-                'currentNode': current_node,
-                'updatedAt': datetime.now()
-            }
-            if phase == 'delivery':
-                # NEW: Mark fully completed with exit timestamp
-                update_data.update({
-                    'deliveryStatus': 'delivered',
-                    'exitTime': datetime.now(),
-                    'deliveryEndAt': datetime.now()
-                })
-            elif phase == 'store_load':
-                # NEW: Pair complete → trigger delivery directly (no poll)
-                update_data['status'] = 'stored'
-                update_data['storageCompleteAt'] = datetime.now()
-                logger.info(f"Store pair complete for {shipment_id}; triggering delivery")
-                delivery_details = {'shipmentId': shipment_id, 'pickupNode': shipment.get('destination', 'B4')}
-                await self._assign_stage_device(shipment_id, 'delivery', delivery_details)
-            await self.db.shipments.update_one(
-                {'id': shipment_id},
-                {'$set': update_data}
-            )
-            logger.info(f"Completed {phase} for {shipment_id} at {current_node}; status → {new_status}")
-
-        # FIXED: Flat payload to prevent recursion/nesting
-        completion_payload = {
-            'deviceId': device_id,
-            'status': 'completed',
-            'shipmentId': shipment_id,
-            'phase': phase,
-            'endLocation': current_node,
-            'completedAt': datetime.now().isoformat()
-            # REMOVED: 'task': task_payload  # Avoids potential circular reference or deep nesting
-        }
-        
-        # FIXED: Add source flag to break potential MQTT loops (manager can check != 'internal')
-        completion_payload['source'] = 'task_assigner'
-        
-        # Publish to a dedicated internal topic to avoid manager re-handling completions
-        await self.mqtt_client.publish(
-            f"harboursense/internal/completion/{device_id}",
-            json.dumps(completion_payload)
-        )
-        logger.debug(f"Published flat completion for {device_id}: {completion_payload}")
-
-        # Optional: Trigger analyzer if needed
-        await self.analyzer.analyze_metrics(triggered_by=f"Completion {device_id} ({phase})")
-
-        # NEW: For delivery, delay truck return to idle
-        if phase == 'delivery':
-            asyncio.create_task(self._delay_truck_return(device_id))
-
-        # NEW: Direct transition from transport to store_move if at warehouse
-        if phase == 'transport' and shipment_id:
-            shipment = await self.db.shipments.find_one({'id': shipment_id})
-            warehouse = shipment.get('destination', self._nearest_warehouse(current_node))
-            if current_node == warehouse:  # Confirm at warehouse post-transport
-                logger.info(f"Transport complete for {shipment_id} at {warehouse}; triggering store_move (robot)")
+    async def handle_completion(db, task_assigner, device_id, task_payload, mqtt_client=None):
+        logger.info(f"Handling completion for {device_id}; raw payload: {task_payload}")
+        try:
+            # FIXED: Handle str/bytes payload (MQTT common); loads to dict
+            if isinstance(task_payload, (str, bytes)):
+                if isinstance(task_payload, bytes):
+                    task_payload = task_payload.decode('utf-8', errors='ignore')
+                try:
+                    task_payload = json.loads(task_payload)
+                    logger.debug(f"Parsed completion payload: {json.dumps(task_payload, default=str)}")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"JSON decode fail for {device_id}: {e}; treat as simple completion (no task details)")
+                    task_payload = {'deviceId': device_id, 'phase': 'unknown', 'shipmentId': None}  # Minimal dict
+            elif not isinstance(task_payload, dict):
+                logger.error(f"Invalid payload type for {device_id}: {type(task_payload)}; skip")
+                return
+            
+            # Now safe .get()
+            shipment_id = task_payload.get('shipmentId')
+            phase = task_payload.get('phase', 'unknown')
+            
+            # Call TaskAssigner (updates edge/status)
+            await task_assigner.handle_completion(device_id, task_payload)
+            
+            # Fallback updates (if TaskAssigner misses)
+            if shipment_id:
+                new_status = {'offload': 'offloaded', 'transport': 'transported', 'store_move': 'storing', 'store_load': 'stored', 'delivery': 'delivered'}.get(phase, 'completed')
+                await db.edgeDevices.update_one({'id': device_id}, {'$set': {'shipmentId': None, 'assignedShipment': None, 'taskPhase': 'idle', 'task': None}})
+                await db.shipments.update_one({'id': shipment_id}, {'$set': {'status': new_status, 'updatedAt': datetime.now()}})
+                if phase == 'store_load':  # Forklift end: occ already +1 in monitor
+                    await db.shipments.update_one({'id': shipment_id}, {'$set': {'storageCompleteAt': datetime.now(), 'deliveryStatus': 'pending'}})
+                logger.info(f"Completed {phase} for {shipment_id} → {new_status}; edge {device_id} idle")
                 
-                # Assign store_move immediately
-                move_details = {'shipmentId': shipment_id, 'pickupNode': warehouse, 'subPhase': 'move'}
-                robot_assigned = await self._assign_stage_device(shipment_id, 'store_move', move_details)
+                # Publish
+                if mqtt_client:
+                    await mqtt_client.publish(f"harboursense/edge/completion/{device_id}", json.dumps({'status': 'completed', 'shipment': shipment_id, 'phase': phase}))
+            
+            # Re-analyze post-complete
+            if task_assigner.analyzer:
+                await task_assigner.analyzer.analyze_metrics(f"completion_{device_id}")
                 
-                if robot_assigned:
-                    await self.db.shipments.update_one(
-                        {'id': shipment_id},
-                        {'$set': {'nextPhase': 'store_load', 'storeQueued': False, 'updatedAt': datetime.now()}}
-                    )
-                    logger.info(f"Robot {robot_assigned} assigned for store_move on {shipment_id}; awaiting completion for store_load")
-                    
-                    # Async wait for robot complete to assign forklift (avoids monitor delay)
-                    asyncio.create_task(self._await_and_assign_forklift(shipment_id, warehouse))
-                else:
-                    # Fallback: Queue for monitor
-                    await self.db.shipments.update_one(
-                        {'id': shipment_id},
-                        {'$set': {'storeQueued': True, 'nextPhase': 'store_move', 'updatedAt': datetime.now()}}
-                    )
-                    logger.warning(f"No idle robot for store_move on {shipment_id}; queued for monitor")
-            else:
-                logger.warning(f"Transport complete but not at warehouse for {shipment_id}: {current_node} != {warehouse}; monitor will handle")
-
-        logger.info(f"Completion handled for {device_id} ({phase}) at {current_node}")
+        except Exception as e:
+            logger.error(f"Error in handle_completion for {device_id}: {e}")
+            # Minimal fallback: Reset edge to idle
+            await db.edgeDevices.update_one({'id': device_id}, {'$set': {'taskPhase': 'idle', 'shipmentId': None, 'assignedShipment': None, 'task': None}})
 
     # NEW: Helper (add after handle_completion)
     async def _await_and_assign_forklift(self, shipment_id, warehouse):
@@ -759,10 +586,19 @@ class TaskAssigner:
                 def safe_warehouse_load(wh_id):
                     wh_data = self.graph.get(wh_id, {})
                     occ = wh_data.get('currentOccupancy', 0) or 0
-                    pred = self.analyzer.get_predicted_load(wh_id)  # Int-safe from analyzer
-                    total = int(occ) + int(pred)
-                    cap = wh_data.get('capacity', 35) or 35  # Per-wh from graph (B4=35, D2=20, etc.)
+                    # FIXED: Plural method for full dict, then .get(wh_id, 0); safe if analyzer None or non-dict
+                    if self.analyzer:
+                        try:
+                            pred_loads = self.analyzer.get_predicted_loads()
+                            pred = int(pred_loads.get(wh_id, 0)) if isinstance(pred_loads, dict) else 0
+                        except (AttributeError, TypeError):
+                            pred = 0  # Fallback on method errors (e.g., during init)
+                    else:
+                        pred = 0
+                    total = int(occ) + pred
+                    cap = wh_data.get('capacity', 35) or 35  # Wh-specific: B4=3, D2=2, E5=35
                     load_pct = total / cap if cap > 0 else 0.0
+                    logger.debug(f"Wh {wh_id} load: occ={occ}, pred={pred}, total={total}/{cap} (pct={load_pct:.2f})")
                     return total, cap, load_pct
 
                 # Transports (truck_tempo for offloaded) – queue high wh

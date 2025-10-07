@@ -533,13 +533,12 @@ class TrafficAnalyzer:
     def get_route_congestion(self):
         return dict(self.route_congestion)
 
-    def get_predicted_load(self, wh_id):
-        """Return int or 0 for warehouse ID (e.g., 'B4'); uses predicted_loads state. FIXED: Align to self.predicted_loads; wh validation."""
-        if not wh_id or wh_id not in ['B4', 'D2', 'E5']:  # Wh-specific (add your list; skip non-wh)
-            logger.debug(f"Invalid/non-wh wh_id {wh_id}; return 0")
-            return 0
-        pred = self.predicted_loads.get(wh_id, 0)  # FIXED: Use computed predicted_loads (not unset predictions)
-        return int(pred) if pred is not None else 0
+    def get_predicted_loads(self, node=None):
+        """Return full dict of predicted loads, or scalar for specific node (wh-focused, sensor/ETA enhanced)."""
+        loads = dict(self.predicted_loads)
+        if node and node in loads:
+            return loads.get(node, 0)
+        return loads  # Full dict if no node
 
     async def start_mqtt_listener(self):
         """Clean MQTT listener: Subscribe to path updates, trigger analysis/reroutes."""

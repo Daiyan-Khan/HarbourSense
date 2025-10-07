@@ -66,7 +66,7 @@ async def handle_traffic_update(db, mqtt_client, edge_id, analyzer, task_assigne
             predicted_loads = analyzer.get_predicted_loads()
             logger.debug(f"Computing new path for {edge_id}. Start: {start}, Dest: {dest}, node_loads sample: {dict(list(node_loads.items())[:3])}, congestion sample: {dict(list(route_congestion.items())[:3])}, predicted sample: {dict(list(predicted_loads.items())[:3])}")
 
-            new_path = analyzer.planner.compute_path(
+            new_path = SmartRoutePlanner.compute_path(
                 start, dest, node_loads, route_congestion, predicted_loads=predicted_loads
             )
             if new_path:
@@ -161,6 +161,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
         raw_payload = message.payload.decode('utf-8', errors='ignore')
         logger.debug(f"=== MQTT MESSAGE RECEIVED === Topic: {topic}, Raw Payload: {raw_payload} (len: {len(raw_payload)})")
 
+
         if 'harboursense/shipments/' in topic:
             try:
                 payload = json.loads(raw_payload)
@@ -171,6 +172,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
             
             shipment_id = topic.split('/')[-1]  # e.g., shipment_1
             logger.debug(f"Received shipment update for {shipment_id}: {json.dumps(payload, indent=2)}")
+
 
             # Handle Nulls (existing)
             status = payload.get('status', 'arrived')
@@ -186,6 +188,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                 payload['destination'] = 'C5'
                 dest = 'C5'
 
+
             # Parse createdAt (existing)
             created_at = payload.get('createdAt')
             try:
@@ -194,6 +197,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                 logger.warning(f"Invalid createdAt '{created_at}' for {shipment_id}: {e}; using now")
                 created_at_parsed = datetime.now()
 
+
             # FIXED: Fetch current DB state to preserve assignedEdges before updating
             current_shipment = await db.shipments.find_one({'id': shipment_id})
             if current_shipment:
@@ -201,6 +205,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                 assigned_edges = current_shipment.get('assignedEdges', [])
                 payload['assignedEdges'] = assigned_edges  # Override with DB value
                 logger.debug(f"Preserved assignedEdges for {shipment_id}: {assigned_edges} (len: {len(assigned_edges)})")
+
 
             # Initial DB update (existing, now with merged assignedEdges)
             update_data = {
@@ -214,17 +219,21 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
             }
             logger.debug(f"Updating DB for {shipment_id} with: {json.dumps(update_data, default=str, indent=2)}")
 
+
             await db.shipments.update_one({'id': shipment_id}, {'$set': update_data}, upsert=True)
             logger.info(f"Synced shipment {shipment_id} update: status={status} at {current_node}, edges={len(update_data['assignedEdges'])}")
 
+
             # NEW: Manager detects arrival/offload, asks TaskAssigner for warehouse decision
             if status in ['arrived', 'offloaded']:
-                if self.task_assigner.graph:  # Typo: task_assigner → wait, this is global func; pass or global
-                    # Wait, in your code it's func, but calls task_assigner – assume global or pass; for now:
+                # FIXED: Typo fix - task_assigner (passed param), not self.
+                if task_assigner.graph:  # Ensure graph loaded
+                    # Wait, in your code it's func, but calls task_assigner – assume passed; for now:
                     warehouse = await task_assigner._select_warehouse(current_node, shipment_id) or task_assigner._nearest_warehouse(current_node)
                     await db.shipments.update_one({'id': shipment_id}, {'$set': {'destination': warehouse, 'warehouseAssigned': warehouse, 'updatedAt': datetime.now()}})
                     logger.info(f"Wh {warehouse} for {shipment_id} at {current_node}")
                     await task_assigner.mqtt_client.publish(f"harboursense/shipments/{shipment_id}/warehouse", json.dumps({'warehouse': warehouse}))
+                        
                         # FIXED: Trigger phase assigns on key statuses (crane for offload, truck_tempo for transport)
                     if status == 'arrived' and db.shipments.find_one({'id': shipment_id, 'assignedEdges': {'$not': {'$elemMatch': {'$regex': 'offload'}}}}):  # No prior offload
                         if task_assigner._is_dock_or_berth(current_node):
@@ -242,9 +251,16 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                                         {'$push': {'assignedEdges': f"{assigned}:offload"}, '$set': {'updatedAt': datetime.now(), 'nextPhase': 'transport'}}
                                     )
                                     logger.info(f"Offload assigned: {assigned} (crane) for {shipment_id}; next=transport")
+                                    
+                                    # NEW: Relocation check for offload
+                                    start_node = current_node  # For offload: current_node (dock)
+                                    device_type = 'crane'  # Stationary; skip reloc if needed
+                                    await _handle_relocation_if_needed(db, task_assigner, analyzer, assigned, shipment_id, phase='offload', start_node=start_node, device_type=device_type)
+                                    
                                 else:
                                     logger.warning(f"No idle crane for {shipment_id}; set queued")
                                     await db.shipments.update_one({'id': shipment_id}, {'$set': {'offloadQueued': True, 'updatedAt': datetime.now()}})
+
 
                         elif status == 'offloaded' and db.shipments.find_one({'id': shipment_id, 'assignedEdges': {'$not': {'$elemMatch': {'$regex': 'transport'}}}}):  # No prior transport
                             if task_assigner._is_dock_or_berth(current_node):
@@ -264,23 +280,95 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                                         {'$push': {'assignedEdges': f"{assigned}:transport"}, '$set': {'updatedAt': datetime.now(), 'nextPhase': 'store_move'}}
                                     )
                                     logger.info(f"Transport assigned: {assigned} (truck_tempo) for {shipment_id} to {warehouse}; next=store_move (robot/forklift)")
+                                    
+                                    # NEW: Relocation check for transport
+                                    start_node = current_node  # For transport: current_node (dock post-offload)
+                                    device_type = 'truck_tempo'
+                                    await _handle_relocation_if_needed(db, task_assigner, analyzer, assigned, shipment_id, phase='transport', start_node=start_node, device_type=device_type)
+                                    
                                 else:
                                     logger.warning(f"No idle truck_tempo for {shipment_id}; set queued")
                                     await db.shipments.update_one({'id': shipment_id}, {'$set': {'transportQueued': True, 'updatedAt': datetime.now()}})
 
-                        # For 'transported'/'stored', chaining in task_assigner (robot/forklift/delivery) → no trigger here
-                        elif status in ['transported', 'stored']:
-                            logger.debug(f"{status} {shipment_id} detected; task_assigner will chain store (robot/forklift) or delivery")
-                            # Optional: Force monitor scan if queued (but avoid; completions handle)
 
-                        # Existing: No direct assigns—monitor_and_assign will scan DB change and trigger based on status
-                        logger.debug(f"DB updated; monitor will handle any remaining/queued for status '{status}'")
-                    else:
-                        # Defensive: If somehow a completion routed here, skip
-                        logger.debug(f"Non-shipment topic {topic} in shipment handler; ignoring")
+                            # For 'transported'/'stored', chaining in task_assigner (robot/forklift/delivery) → no trigger here
+                            elif status in ['transported', 'stored']:
+                                logger.debug(f"{status} {shipment_id} detected; task_assigner will chain store (robot/forklift) or delivery")
+                                # Optional: Force monitor scan if queued (but avoid; completions handle)
+
+
+                            # Existing: No direct assigns—monitor_and_assign will scan DB change and trigger based on status
+                            logger.debug(f"DB updated; monitor will handle any remaining/queued for status '{status}'")
+                        else:
+                                # Defensive: If somehow a completion routed here, skip
+                            logger.debug(f"Non-shipment topic {topic} in shipment handler; ignoring")
+
 
     except Exception as e:
         logger.error(f"Error handling shipment MQTT (topic {message.topic if 'message' in locals() else 'unknown'}): {e}; raw payload={raw_payload[:200]}...")
+async def _handle_relocation_if_needed(db, task_assigner, analyzer, assigned_device, shipment_id, phase, start_node, device_type):
+    """Helper: Check if assigned device needs relocation to start_node; compute path, update DB, publish MQTT if yes."""
+    try:
+        if not assigned_device:
+            return
+        
+        # Skip stationary (e.g., crane for offload)
+        if device_type == 'crane':
+            logger.debug(f"Skipping reloc for stationary {device_type} {assigned_device}")
+            return
+        
+        # Fetch device
+        device_doc = await db.edgeDevices.find_one({'id': assigned_device})
+        if not device_doc:
+            logger.warning(f"Device {assigned_device} not found; skip reloc")
+            return
+        
+        current_loc = device_doc.get('currentLocation', start_node)
+        if current_loc == start_node:
+            logger.debug(f"Device {assigned_device} already at {start_node}; no reloc needed")
+            return
+        
+        logger.info(f"Device {assigned_device} at {current_loc} != start {start_node}; relocating for {phase}")
+        
+        # Compute path (use analyzer or empty fallbacks)
+        node_loads = analyzer.get_current_loads() if analyzer else {}
+        route_congestion = analyzer.get_route_congestion() if analyzer else {}
+        reloc_path = SmartRoutePlanner.compute_path(
+            current_loc, start_node, node_loads, route_congestion
+        )
+        if not reloc_path or len(reloc_path) < 2:
+            logger.warning(f"Invalid reloc path {current_loc}→{start_node}; proceed with teleport")
+            # Optional: Still set currentLocation to start_node
+            await db.edgeDevices.update_one({'id': assigned_device}, {'$set': {'currentLocation': start_node}})
+            return
+        
+        # Update edge to relocating (temp field for sim)
+        await db.edgeDevices.update_one(
+            {'id': assigned_device},
+            {'$set': {
+                'taskPhase': 'relocating',
+                'relocPath': reloc_path,
+                'updatedAt': datetime.now()
+            }}
+        )
+        
+        # Publish for sim (port.js executes, then completes)
+        reloc_payload = {
+            'deviceId': assigned_device,
+            'relocPath': reloc_path,
+            'target': start_node,
+            'shipmentId': shipment_id,
+            'phase': phase
+        }
+        if task_assigner.mqtt_client:
+            await task_assigner.mqtt_client.publish(
+                f"harboursense/edge/relocate/{assigned_device}",
+                json.dumps(reloc_payload)
+            )
+        logger.info(f"Relocation published for {assigned_device} ({phase}): {reloc_path[:3]}... to {start_node}")
+        
+    except Exception as e:
+        logger.error(f"Reloc error for {assigned_device} ({phase}): {e}")
 
 async def handle_sensor_data(db, mqtt_client, analyzer, task_assigner, sensor_analyzer, raw_payload):
     """Handle incoming sensor data: parse payload, detect anomalies, trigger alerts/repairs."""

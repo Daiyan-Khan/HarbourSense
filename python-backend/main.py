@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from sklearn.ensemble import IsolationForest
 import numpy as np
 from bson import ObjectId  # Import this for type checking
-
+import math
 def fix_mongo_ids(document):
     """Recursively convert ObjectId to str in MongoDB documents."""
     if isinstance(document, list):
@@ -20,7 +20,16 @@ def fix_mongo_ids(document):
         return new_doc
     else:
         return document
-
+def sanitize_for_json(data):
+    """Recursively convert NaN to None."""
+    if isinstance(data, list):
+        return [sanitize_for_json(item) for item in data]
+    elif isinstance(data, dict):
+        return {key: sanitize_for_json(value) for key, value in data.items()}
+    elif isinstance(data, float) and math.isnan(data):
+        return None # Convert NaN to null (None in Python)
+    else:
+        return data
 app = FastAPI()
 
 # CORS setup to allow frontend requests
@@ -79,8 +88,22 @@ async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
 
 @app.get("/api/edges")
 async def get_edges():
-    edges = [doc async for doc in db.edgeDevices.find()]
-    return fix_mongo_ids(edges)  # Returns list of edges with id, currentLocation, task, speed, nextNode, etc.
+    try:
+        # 1. Fetch the raw data from MongoDB
+        edges = [doc async for doc in db.edgeDevices.find()]
+        
+        # 2. Fix the MongoDB ObjectIDs
+        fixed_edges = fix_mongo_ids(edges)
+        
+        # 3. Sanitize the data to remove NaN values
+        sanitized_edges = sanitize_for_json(fixed_edges)
+        
+        # 4. Return the clean, JSON-compliant data
+        return sanitized_edges
+
+    except Exception as e:
+        print(f"!!! ERROR IN /api/edges: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred in /api/edges: {e}")
 
 @app.get("/api/sensors")
 async def get_sensors():

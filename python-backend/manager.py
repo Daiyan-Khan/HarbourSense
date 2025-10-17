@@ -500,10 +500,10 @@ async def setup():
         'identifier': "manager",
         'tls_context': ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     }
-    mqtt_params['tls_context'].load_verify_locations(cafile="../certs/AmazonRootCA1.pem")
+    mqtt_params['tls_context'].load_verify_locations(cafile="certs/AmazonRootCA1.pem")
     mqtt_params['tls_context'].load_cert_chain(
-        certfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
-        keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"  # FIXED: Typo 'privat' → 'private'
+        certfile="certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
+        keyfile="certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"  # FIXED: Typo 'privat' → 'private'
     )
 
     try:

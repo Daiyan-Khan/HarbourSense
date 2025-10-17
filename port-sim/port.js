@@ -98,6 +98,27 @@ function transitionToEn_routeStart(currentEdge, taskData) {
     throw new Error(`Can only assign task from IDLE (or edge is null). Current: ${currentEdge?.taskPhase}`);
   }
 
+// Inside your port.js telemetry publishing function
+
+// 1. Define the telemetry data object with the correct keys
+const telemetryData = {
+    craneId: CRANE_ID, // Make sure you have a crane ID
+    motorTemp: getMotorTemperature(), // Your function to get temp
+    vibration: getVibrationLevel(), // Your function to get vibration
+    energyUse: getEnergyUsage()      // Your function to get energy use
+};
+
+// 2. Define the topic for this specific crane's raw telemetry
+const topic = `harboursense/telemetry/crane/${CRANE_ID}/raw`;
+
+// 3. Publish the data as a JSON string
+if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(topic, JSON.stringify(telemetryData), { qos: 0 }, (err) => {
+        if (err) {
+            console.error(`Failed to publish telemetry for ${CRANE_ID}:`, err);
+        }
+    });
+}
 
   console.log(`Transitioning ${currentEdge.id} to EN_ROUTE_START with task ${taskData.task}`);
   return {

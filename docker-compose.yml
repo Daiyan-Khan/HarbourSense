@@ -1,52 +1,58 @@
-version: '3.8'
+# The 'version' tag is obsolete and has been removed.
+
 services:
-  mongodb:
-    image: mongo:latest
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
+  # The local mongodb service has been REMOVED.
 
   mqtt:
     image: eclipse-mosquitto
+    container_name: harboursense-mqtt-1
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
+      - ./mosquitto/conf:/mosquitto/config
       - mosquitto_data:/mosquitto/data
-      - mosquitto_config:/mosquitto/config
 
   backend:
     build: ./python-backend
+    container_name: harboursense-backend-1
     ports:
       - "8000:8000"
     volumes:
       - ./python-backend:/app
+      - ./certs:/app/certs
     depends_on:
-      - mongodb
+      - mqtt # The dependency on 'mongodb' has been removed
+    environment:
+      # This tells your backend service to connect to your Atlas DB
+      - MONGO_URI=mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net
+
+  edge-analyzer:
+    build: ./edge-analyzer
+    container_name: harboursense-edge-analyzer-1
+    depends_on:
       - mqtt
-    command: /bin/bash -c "uvicorn main:app --host 0.0.0.0 --port 8000 & python manager.py"
+    environment:
+      - MQTT_BROKER_HOST=mqtt
 
   portsim:
-    build: 
-      context: ./port-sim
-      dockerfile: Dockerfile 
+    build: ./port-sim
+    container_name: harboursense-portsim-1
     depends_on:
       - backend
       - mqtt
-      - mongodb
     volumes:
       - ./port-sim:/app
     command: node port.js
 
   dashboard:
     build: ./dashboard/visualizer
+    container_name: harboursense-dashboard-1
     ports:
       - "3000:3000"
     depends_on:
       - backend
 
 volumes:
-  mongo_data:
+  # The mongo_data volume is no longer needed
   mosquitto_data:
-  mosquitto_config:

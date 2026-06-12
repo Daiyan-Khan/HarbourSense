@@ -335,12 +335,12 @@ class TrafficAnalyzer:
         route_capacities = route_caps_doc.get('capacities', {}) if route_caps_doc else {}
 
         # NEW: Integrate sensor alerts for predicted load boosts (repairs/congestion)
-        recent_alerts = await self.db.alerts.find({"resolved": False}).to_list(None)  # Unresolved anomalies
+        recent_alerts = await self.db.sensorAlerts.find({"resolved": False}).to_list(None)  # Unresolved anomalies
         alert_penalties = {}  # node: penalty (e.g., 20 for high vibration → virtual load)
         for alert in recent_alerts:
             node = alert.get("node", "")
             severity = alert.get("severity", "low")
-            anomaly_type = alert.get("anomaly_type", "")
+            anomaly_type = alert.get("alert_type", "")
             if anomaly_type in ["vibration_spike", "occupancy_high"] and node:  # Core repair triggers
                 penalty = 20 if severity == "high" else 10  # Boost predicted load (simulates repair tasks)
                 alert_penalties[node] = alert_penalties.get(node, 0) + penalty

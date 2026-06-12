@@ -13,6 +13,25 @@ node_modules/
 Thumbs.db
 *.log
 .env
+.env.*
+!.env.example
 .vscode
 log.txt
 manager_log.txt
+.cursor/
+
+# Local secrets and certificate material
+certs/
+**/certs/
+*.pem
+*.crt
+*.key
+*.p12
+*.pfx
+
+# Local model/runtime artifacts
+*.pkl
+*.joblib
+*.sqlite
+*.db
+mosquitto/data/

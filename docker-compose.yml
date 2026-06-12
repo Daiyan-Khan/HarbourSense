@@ -7,8 +7,8 @@ services:
     image: eclipse-mosquitto
     container_name: harboursense-mqtt-1
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "${MQTT_BROKER_PORT:-1883}:1883"
+      - "${MQTT_WEBSOCKET_PORT:-9001}:9001"
     volumes:
       - ./mosquitto/conf:/mosquitto/config
       - mosquitto_data:/mosquitto/data
@@ -24,8 +24,16 @@ services:
     depends_on:
       - mqtt # The dependency on 'mongodb' has been removed
     environment:
-      # This tells your backend service to connect to your Atlas DB
-      - MONGO_URI=mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net
+      # Supply real secrets through .env; do not commit live credentials.
+      MONGO_URI: ${MONGO_URI:-mongodb://host.docker.internal:27017/port}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
+      MQTT_MODE: ${MQTT_MODE:-local}
+      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
+      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
+      AWS_IOT_ENDPOINT: ${AWS_IOT_ENDPOINT:-}
+      AWS_IOT_CA_PATH: ${AWS_IOT_CA_PATH:-/app/certs/AmazonRootCA1.pem}
+      AWS_IOT_CERT_PATH: ${AWS_IOT_CERT_PATH:-/app/certs/device-certificate.pem.crt}
+      AWS_IOT_KEY_PATH: ${AWS_IOT_KEY_PATH:-/app/certs/private.key}
 
   edge-analyzer:
     build: ./edge-analyzer
@@ -33,7 +41,8 @@ services:
     depends_on:
       - mqtt
     environment:
-      - MQTT_BROKER_HOST=mqtt
+      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
+      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
 
   portsim:
     build: ./port-sim
@@ -44,6 +53,16 @@ services:
     volumes:
       - ./port-sim:/app
     command: node port.js
+    environment:
+      MONGO_URI: ${MONGO_URI:-mongodb://host.docker.internal:27017/port}
+      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
+      MQTT_MODE: ${MQTT_MODE:-local}
+      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
+      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
+      AWS_IOT_ENDPOINT: ${AWS_IOT_ENDPOINT:-}
+      AWS_IOT_CA_PATH: ${AWS_IOT_CA_PATH:-/app/certs/AmazonRootCA1.pem}
+      AWS_IOT_CERT_PATH: ${AWS_IOT_CERT_PATH:-/app/certs/device-certificate.pem.crt}
+      AWS_IOT_KEY_PATH: ${AWS_IOT_KEY_PATH:-/app/certs/private.key}
 
   dashboard:
     build: ./dashboard/visualizer

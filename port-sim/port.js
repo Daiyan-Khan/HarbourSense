@@ -43,9 +43,12 @@ let suggestionsByEdge = {};
 const NODE_BASE_DISTANCE = 100;
 const EDGE_SPEEDS = {
   truck: 10,
+  truck_tempo: 10,
+  truck_delivery: 10,
   agv: 8,
   conveyor: 5,
   crane: 4,
+  forklift: 4,
   robot: 6,
   unknown: 5
 };
@@ -66,13 +69,13 @@ const IDLE_DEFAULTS = {
   taskPhase: 'idle',     // Explicit phase (standardize casing)
   path: [],              // NEW: Clear stale paths (len=0)
   remainingPath: [],     // NEW: If tracked separately in sim
-  nextNode: 'Null',
-  finalNode: 'Null',
-  startNode: 'Null',
-  eta: 'N/A',
-  journeyTime: 'N/A',
-  shipmentId: "Null",
-  assignedShipment: "Null", // NEW: Break shipment links
+  nextNode: null,
+  finalNode: null,
+  startNode: null,
+  eta: null,
+  journeyTime: null,
+  shipmentId: null,
+  assignedShipment: null, // NEW: Break shipment links
   taskCompletionTime: 0, // NEW: Reset sim timers
   priority: null,        // NEW: If set per-task
   updatedAt: new Date().toISOString()  // NEW: Fresh timestamp for DB
@@ -97,28 +100,6 @@ function transitionToEn_routeStart(currentEdge, taskData) {
          currentEdge.shipmentId === taskData.shipmentId))) {
     throw new Error(`Can only assign task from IDLE (or edge is null). Current: ${currentEdge?.taskPhase}`);
   }
-
-// Inside your port.js telemetry publishing function
-
-// 1. Define the telemetry data object with the correct keys
-const telemetryData = {
-    craneId: CRANE_ID, // Make sure you have a crane ID
-    motorTemp: getMotorTemperature(), // Your function to get temp
-    vibration: getVibrationLevel(), // Your function to get vibration
-    energyUse: getEnergyUsage()      // Your function to get energy use
-};
-
-// 2. Define the topic for this specific crane's raw telemetry
-const topic = `harboursense/telemetry/crane/${CRANE_ID}/raw`;
-
-// 3. Publish the data as a JSON string
-if (mqttClient && mqttClient.connected) {
-    mqttClient.publish(topic, JSON.stringify(telemetryData), { qos: 0 }, (err) => {
-        if (err) {
-            console.error(`Failed to publish telemetry for ${CRANE_ID}:`, err);
-        }
-    });
-}
 
   console.log(`Transitioning ${currentEdge.id} to EN_ROUTE_START with task ${taskData.task}`);
   return {
@@ -221,68 +202,6 @@ function nodeDistance(a, b) {
   return Math.abs(rowA - rowB) + Math.abs(colA.charCodeAt(0) - colB.charCodeAt(0));
 }
 
-// Helper: Select nearest warehouse from dock (simple; extend with DB if needed)
-async function selectNearestWarehouse(dockNode, db) {
-  // Hardcoded warehouses; query DB for dynamic (e.g., B4, D2, E5)
-  const warehouses = ['B4', 'D2', 'E5'];
-  let nearest = 'B4';
-  let minDist = Infinity;
-  for (const wh of warehouses) {
-    const dist = nodeDistance(dockNode, wh);
-    if (dist < minDist) {
-      minDist = dist;
-      nearest = wh;
-    }
-  }
-  return nearest;
-}
-
-// Helper: Check and assign transport if idle truck available (simulates backend trigger)
-async function checkAndAssignTransport(shipmentId, dockNode, db, device) {
-  console.log(`[CHAIN] Checking transport for pending ${shipmentId} from ${dockNode}`);
-  const idleTrucks = await db.collection('edgeDevices').find({ type: 'truck', taskPhase: TaskPhase.IDLE }).toArray();
-  if (idleTrucks.length > 0) {
-    const truck = idleTrucks[0];  // Nearest (add sort by distance if needed)
-    const warehouse = await selectNearestWarehouse(dockNode, db);
-    const transportTask = {
-      shipmentId: shipmentId,
-      phase: 'transport',
-      startNode: dockNode,
-      finalNode: warehouse,
-      requiredPlace: dockNode,  // Pickup at dock
-      path: [dockNode, 'B1', warehouse]  // Example path; use analyzer if integrated
-    };
-    // Publish task to truck (mirrors backend)
-    device.publish(`harboursense/edge/${truck.id}/task`, JSON.stringify(transportTask));
-    console.log(`[CHAIN] Assigned transport to ${truck.id} for ${shipmentId} to ${warehouse}`);
-  } else {
-    console.log(`[CHAIN] No idle truck for ${shipmentId}; will retry on next monitor cycle`);
-  }
-}
-
-// Helper: Assign store forklift/robot to warehouse if idle (pre-position during transport)
-async function assignStoreForklift(shipmentId, warehouse, db, device) {
-  console.log(`[CHAIN] Assigning store for ${shipmentId} to ${warehouse}`);
-  const idleRobots = await db.collection('edgeDevices').find({ type: 'robot', taskPhase: TaskPhase.IDLE }).toArray();
-  if (idleRobots.length > 0) {
-    const robot = idleRobots[0];  // Nearest to warehouse
-    const storeTask = {
-      shipmentId: shipmentId,
-      phase: 'store',
-      startNode: warehouse,
-      finalNode: warehouse,  // Stationary at warehouse
-      requiredPlace: warehouse,
-      pickupNode: warehouse,
-      path: [warehouse]  // Already/direct
-    };
-    // Publish task to robot
-    device.publish(`harboursense/edge/${robot.id}/task`, JSON.stringify(storeTask));
-    console.log(`[CHAIN] Assigned store to ${robot.id} for ${shipmentId} at ${warehouse}`);
-  } else {
-    console.log(`[CHAIN] No idle robot for ${shipmentId}; will retry`);
-  }
-}
-
 // FIXED: Task execution with shipment updates + dynamic duration + more debug + chaining
 async function executeTask(edgeId, db, device, edge, taskData, steps = 5) {  // Add edge, taskData, steps params
   if (!edge || !taskData) {
@@ -351,6 +270,14 @@ async function completeTaskAndChain(edgeId, taskData, device, db, edge) {
   edge.shipmentId = null;
   edge.assignedShipment = null;
   edge.currentLocation = finalNode || edge.currentLocation;
+  edge.task = 'idle';
+  edge.path = [];
+  edge.remainingPath = [];
+  edge.nextNode = null;
+  edge.startNode = null;
+  edge.finalNode = null;
+  edge.eta = null;
+  edge.journeyTime = null;
   await updateEdgeInDB(edge, db);  // Use existing update or db.collection('edgeDevices').updateOne
 
   // Publish completion
@@ -365,72 +292,9 @@ async function completeTaskAndChain(edgeId, taskData, device, db, edge) {
   device.publish(`harboursense/edge/${edgeId}/completion`, JSON.stringify(completionPayload));
   console.log(`[CHAIN] Published completion for ${edgeId}: ${JSON.stringify(completionPayload)}`);
 
-  // Update shipment status and chain next phase
-  let newStatus;
-  let newCurrentNode = finalNode || edge.currentLocation;
-  switch (phase) {
-    case 'offload':
-      newStatus = 'offloaded';
-      await db.collection('shipments').updateOne(
-        { id: shipmentId },
-        { 
-          $set: { 
-            status: newStatus, 
-            currentNode: newCurrentNode, 
-            updatedAt: new Date() 
-          },
-          $addToSet: { assignedEdges: { device: edge.type, phase: phase } }
-        }
-      );
-      console.log(`[CHAIN] Offload complete for ${shipmentId}; status → ${newStatus} at ${newCurrentNode}`);
-      // Concurrent: Check/assign transport if truck idle
-      setTimeout(() => checkAndAssignTransport(shipmentId, newCurrentNode, db, device), 1000);
-      break;
-    case 'transport':
-      newStatus = 'transported';
-      newCurrentNode = taskData.finalNode || 'B4';
-      await db.collection('shipments').updateOne(
-        { id: shipmentId },
-        { 
-          $set: { 
-            status: newStatus, 
-            currentNode: newCurrentNode, 
-            updatedAt: new Date() 
-          },
-          $addToSet: { assignedEdges: { device: edge.type, phase: phase } }
-        }
-      );
-      console.log(`[CHAIN] Transport complete for ${shipmentId} to ${newCurrentNode}; status → ${newStatus}`);
-      // Concurrent: Assign store (forklift) to warehouse
-      setTimeout(() => assignStoreForklift(shipmentId, newCurrentNode, db, device), 500);
-      break;
-    case 'store':
-      newStatus = 'stored';
-      await db.collection('shipments').updateOne(
-        { id: shipmentId },
-        { 
-          $set: { 
-            status: newStatus, 
-            updatedAt: new Date() 
-          },
-          $addToSet: { assignedEdges: { device: edge.type, phase: phase } }
-        }
-      );
-      console.log(`[CHAIN] Store complete for ${shipmentId}; status → ${newStatus}`);
-      break;
-    default:
-      newStatus = 'completed';
-  }
-
-  // Publish shipment update
-  const shipmentUpdate = { 
-    id: shipmentId, 
-    status: newStatus, 
-    currentNode: newCurrentNode, 
-    completedAt: new Date().toISOString() 
-  };
-  device.publish(`harboursense/shipments/${shipmentId}`, JSON.stringify(shipmentUpdate));
-  console.log(`[CHAIN] Published shipment update for ${shipmentId}: ${newStatus}`);
+  // Backend owns shipment status transitions and follow-up assignment. The simulator
+  // only reports physical completion and leaves shipment mutation to manager.py.
+  console.log(`[CHAIN] Completion reported for ${shipmentId} (${phase}); backend will advance workflow`);
 }
 
 // Helper: Update edge in DB (inline for simplicity; expand if needed)
@@ -443,6 +307,14 @@ async function updateEdgeInDB(edge, db) {
         shipmentId: edge.shipmentId,
         assignedShipment: edge.assignedShipment,
         currentLocation: edge.currentLocation,
+        task: edge.task,
+        path: edge.path,
+        remainingPath: edge.remainingPath,
+        nextNode: edge.nextNode,
+        startNode: edge.startNode,
+        finalNode: edge.finalNode,
+        eta: edge.eta,
+        journeyTime: edge.journeyTime,
         updatedAt: new Date()
       }
     }
@@ -759,22 +631,22 @@ async function runPortSimulation() {
     const defaultEdges = [
       { id: 'crane_1', type: 'crane', currentLocation: 'A1', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'crane_2', type: 'crane', currentLocation: 'A1', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'truck_1', type: 'truck', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'truck_2', type: 'truck', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'truck_3', type: 'truck', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'robot_1', type: 'robot', currentLocation: 'C5', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'robot_2', type: 'robot', currentLocation: 'C5', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'robot_3', type: 'robot', currentLocation: 'C5', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'robot_4', type: 'robot', currentLocation: 'C5', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS }
+      { id: 'truck_tempo_1', type: 'truck_tempo', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'truck_tempo_2', type: 'truck_tempo', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'truck_delivery_1', type: 'truck_delivery', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'robot_1', type: 'robot', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'robot_2', type: 'robot', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'forklift_1', type: 'forklift', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'forklift_2', type: 'forklift', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS }
     ];
     await db.collection('edgeDevices').insertMany(defaultEdges);
-    console.log('Inserted 9 default edges (cranes/trucks/robots).');
+    console.log('Inserted 9 default edges (cranes, tempo/delivery trucks, robots, forklifts).');
   }
 
   // NEW: Load port.graph for dynamic docks/warehouses
   const graphNodes = await db.collection('graph').find({}).toArray();
   const docks = graphNodes.filter(node => node.type === 'dock').map(node => node.id);  // e.g., ['A1', 'A2']
-  const warehouses = ['B4', 'D2', 'E5'];  // From logs; or filter graph type: 'warehouse'
+  const warehouses = graphNodes.filter(node => node.type === 'warehouse').map(node => node.id);
   if (docks.length < 1) {
     console.warn('No dock nodes in graph; falling back to A1');
     docks.push('A1');
@@ -792,7 +664,7 @@ async function runPortSimulation() {
     console.log('Connected to AWS IoT Core');
     const topics = [
       'harboursense/edge/+/task',
-      'harboursense/traffic/+',
+      'harboursense/traffic/update/+',
       'harboursense/shipments/+'
     ];
 
@@ -819,7 +691,7 @@ async function runPortSimulation() {
       console.log(`Message on topic: ${topic}`);
 
       const taskMatch = topic.match(/^harboursense\/edge\/([^/]+)\/task$/);
-      const trafficMatch = topic.match(/^harboursense\/traffic\/([^/]+)$/);
+      const trafficMatch = topic.match(/^harboursense\/traffic\/update\/([^/]+)$/);
       const shipmentMatch = topic.match(/^harboursense\/shipments\/(.+)$/);
 
       // FIXED: Task handler wrapped in try/catch for error handling (as provided)
@@ -876,7 +748,7 @@ async function runPortSimulation() {
           finalNode: taskData.finalNode,
           startNode: edge.startNode,
           nextNode: taskData.path?.[1] || taskData.destNode,
-          currentLocation: taskData.startNode || edge.currentLocation,
+          currentLocation: edge.currentLocation,
           assignedShipment: taskData.shipmentId,  // Sync legacy field if used
           updatedAt: new Date()
         };
@@ -910,15 +782,18 @@ async function runPortSimulation() {
         const shipmentData = JSON.parse(payload.toString());
         console.log(`Shipment update ${shipmentId}:`, shipmentData);
 
+        const shipmentUpdates = {
+          updatedAt: new Date()
+        };
+        if (shipmentData.status) shipmentUpdates.status = shipmentData.status;
+        if (shipmentData.currentNode) shipmentUpdates.currentNode = shipmentData.currentNode;
+        if (shipmentData.destination) shipmentUpdates.destination = shipmentData.destination;
+        if (shipmentData.warehouseAssigned) shipmentUpdates.warehouseAssigned = shipmentData.warehouseAssigned;
+        if (Array.isArray(shipmentData.assignedEdges)) shipmentUpdates.assignedEdges = shipmentData.assignedEdges;
+
         await db.collection('shipments').updateOne(
           { id: shipmentId },
-          {
-            $set: {
-              status: shipmentData.status || 'waiting',
-              currentNode: shipmentData.currentNode || 'A1',
-              assignedEdges: shipmentData.assignedEdges || []
-            }
-          },
+          { $set: shipmentUpdates },
           { upsert: true }
         );
 

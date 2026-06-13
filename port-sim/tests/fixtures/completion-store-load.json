@@ -1,0 +1,8 @@
+{
+  "id": "forklift_001",
+  "shipmentId": "shipment-smoke-1",
+  "phase": "store_load",
+  "status": "completed",
+  "location": "D2",
+  "completedAt": "2026-06-12T10:30:00.000Z"
+}

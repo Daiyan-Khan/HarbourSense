@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install Node dependencies (assuming package.json in repo)
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy simulation code
 COPY . ./
@@ -13,4 +13,8 @@ COPY . ./
 # Copy certs for AWS IoT
 COPY certs/ ./certs/
 
-CMD ["nodemon", "port.js"]  # Adjust to your main sim file, e.g., port_simulator.js
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["node", "port.js"]

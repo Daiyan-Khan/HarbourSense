@@ -1,25 +1,21 @@
 const { MongoClient } = require('mongodb');
-const awsIot = require('aws-iot-device-sdk');
-const path = require('path');
+const {
+  createMongoClient,
+  createMqttDevice,
+  getMongoSettings,
+  getMqttBrokerLabel,
+} = require('./runtime-config');
 
-// MongoDB URI
-const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net/port';
-
-// AWS IoT Core setup
-const device = awsIot.device({
-  keyPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key'),
-  certPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt'),
-  caPath: path.join(__dirname, 'certs/AmazonRootCA1.pem'),
-  clientId: 'sensor_simulator',
-  host: 'a1dghi6and062t-ats.iot.us-east-1.amazonaws.com'
-});
+const mongoSettings = getMongoSettings();
+const device = createMqttDevice('sensor_simulator');
+const mqttBrokerLabel = getMqttBrokerLabel();
 
 async function runSimulator() {
-  const client = new MongoClient(uri);
+  const client = createMongoClient(MongoClient, mongoSettings);
   try {
     await client.connect();
-    console.log('Connected to MongoDB');
-    const db = client.db('port');
+    console.log(`Connected to MongoDB database '${mongoSettings.databaseName}' from MONGO_URI`);
+    const db = client.db(mongoSettings.databaseName);
     const sensorsCol = db.collection('sensorList');
     const dataCol = db.collection('sensorData');
     const sensors = await sensorsCol.find().toArray();
@@ -29,22 +25,19 @@ async function runSimulator() {
     }
     console.log(`Loaded ${sensors.length} sensors.`);
 
-    // Connect to AWS IoT MQTT
     device.on('connect', () => {
-      console.log('Connected to AWS IoT Core MQTT');
+      console.log(`Connected to ${mqttBrokerLabel}`);
     });
     device.on('error', (err) => {
-      console.error('AWS IoT error:', err);
+      console.error('MQTT error:', err);
     });
     device.on('reconnect', () => {
-      console.log('Reconnecting to AWS IoT...');
+      console.log(`Reconnecting to ${mqttBrokerLabel}...`);
     });
 
-    // Function to generate and post data for a single sensor
     const simulateSensor = (sensor) => {
       const postData = async () => {
         let reading = generateReading(sensor.type);
-        // 10% chance of spike/anomaly
         if (Math.random() < 0.1) {
           reading = generateSpike(sensor.type, reading);
           console.log(`Spike detected for ${sensor.id}: ${reading}`);
@@ -56,7 +49,6 @@ async function runSimulator() {
           reading: reading,
           timestamp: new Date()
         };
-        // Publish to MQTT topic
         device.publish('harboursense/sensor/data', JSON.stringify(payload), (err) => {
           if (err) {
             console.error(`Error publishing for ${sensor.id}:`, err);
@@ -64,7 +56,6 @@ async function runSimulator() {
             console.log(`Published to MQTT for ${sensor.id} at ${sensor.node}: ${JSON.stringify(payload)}`);
           }
         });
-        // Insert to MongoDB
         try {
           await dataCol.insertOne(payload);
           console.log(`Inserted to MongoDB for ${sensor.id}`);
@@ -73,7 +64,6 @@ async function runSimulator() {
         }
       };
 
-      // Set variable interval based on type
       let intervalMs;
       switch (sensor.type) {
         case 'motion':
@@ -95,7 +85,6 @@ async function runSimulator() {
   } catch (error) {
     console.error('Simulator error:', error);
   }
-  // No client.close() to keep running
 }
 
 function generateReading(type) {
@@ -111,11 +100,11 @@ function generateReading(type) {
 
 function generateSpike(type, baseReading) {
   switch (type) {
-    case 'temperature': return (parseFloat(baseReading) + Math.random() * 20 + 10).toFixed(2); // Spike to >50°C
-    case 'humidity': return (parseFloat(baseReading) + Math.random() * 50).toFixed(2); // >100%
-    case 'vibration': return (parseFloat(baseReading) + Math.random() * 15 + 5).toFixed(2); // >15
-    case 'occupancy': return 100; // Full occupancy
-    case 'motion': return 'detected'; // Always detect
+    case 'temperature': return (parseFloat(baseReading) + Math.random() * 20 + 10).toFixed(2);
+    case 'humidity': return (parseFloat(baseReading) + Math.random() * 50).toFixed(2);
+    case 'vibration': return (parseFloat(baseReading) + Math.random() * 15 + 5).toFixed(2);
+    case 'occupancy': return 100;
+    case 'motion': return 'detected';
     default: return (parseFloat(baseReading) * 2).toFixed(2);
   }
 }

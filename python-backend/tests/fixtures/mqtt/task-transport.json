@@ -1,0 +1,10 @@
+{
+  "shipmentId": "shipment-smoke-1",
+  "phase": "transport",
+  "task": "haul_to_warehouse",
+  "startNode": "C3",
+  "finalNode": "D2",
+  "requiredPlace": "C3",
+  "path": ["C3", "D2"],
+  "assignedAt": "2026-06-12T10:01:00.000Z"
+}

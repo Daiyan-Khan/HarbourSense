@@ -1,0 +1,8 @@
+{
+  "id": "truck_tempo_1",
+  "shipmentId": "shipment-smoke-1",
+  "phase": "transport",
+  "status": "completed",
+  "location": "D2",
+  "completedAt": "2026-06-12T10:15:00.000Z"
+}

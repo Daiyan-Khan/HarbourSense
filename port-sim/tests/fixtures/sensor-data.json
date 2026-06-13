@@ -1,0 +1,7 @@
+{
+  "id": "sensor-smoke-1",
+  "type": "temperature",
+  "node": "B4",
+  "reading": 22.5,
+  "timestamp": "2026-06-12T10:00:00.000Z"
+}

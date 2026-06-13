@@ -1,14 +1,17 @@
 const { MongoClient } = require('mongodb');
+const { getMongoSettings } = require('../runtime-config');
 
 async function migrateEdges() {
-  const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net/port';
-  const client = new MongoClient(uri);
+  const mongoSettings = getMongoSettings();
+  const client = new MongoClient(mongoSettings.uri, {
+    serverSelectionTimeoutMS: mongoSettings.serverSelectionTimeoutMS,
+  });
 
   try {
     await client.connect();
     console.log('Connected to MongoDB');
 
-    const db = client.db('port');
+    const db = client.db(mongoSettings.databaseName);
     const edgeDevicesCol = db.collection('edgeDevices');
     const edges = require('./test-edge.json');  // Load devices from edge.json
 

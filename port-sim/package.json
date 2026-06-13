@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "seed:mongo": "node initialise/seed-mongo.js",
+    "test": "node --test tests/**/*.test.js",
+    "test:mqtt-broker": "node --test tests/mqtt-broker.integration.test.js",
+    "check": "node --check port.js"
+  },
   "dependencies": {
     "aws-iot-device-sdk": "^2.2.15",
     "aws-iot-device-sdk-v2": "^1.23.0",

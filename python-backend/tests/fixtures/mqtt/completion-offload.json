@@ -1,0 +1,8 @@
+{
+  "id": "crane001",
+  "shipmentId": "shipment-smoke-1",
+  "phase": "offload",
+  "status": "completed",
+  "location": "C3",
+  "completedAt": "2026-06-12T10:00:00.000Z"
+}

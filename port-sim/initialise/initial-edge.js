@@ -3,8 +3,7 @@
 const { MongoClient } = require('mongodb');
 const { graphData } = require('./graph.js');  // Your graph loader for valid nodes/routes
 const devices = require('./test-edge.json');  // Load devices from test-edge.json
-
-const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net/';
+const { getMongoSettings } = require('../runtime-config');
 
 // Helper: Get random node from graph
 function getRandomNode() {
@@ -169,10 +168,13 @@ const docks = getDocks();
 initialEdges = assignCranesToDocks(initialEdges, docks);
 
 async function storeInitialEdges() {
-  const client = new MongoClient(uri);
+  const mongoSettings = getMongoSettings();
+  const client = new MongoClient(mongoSettings.uri, {
+    serverSelectionTimeoutMS: mongoSettings.serverSelectionTimeoutMS,
+  });
   try {
     await client.connect();
-    const db = client.db('port');
+    const db = client.db(mongoSettings.databaseName);
     const edgesColl = db.collection('edgeDevices');
     await edgesColl.deleteMany({});  // Clear existing
     const result = await edgesColl.insertMany(initialEdges);

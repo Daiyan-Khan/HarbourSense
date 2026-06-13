@@ -1,76 +1,107 @@
-# edge-analyzer/edge-analyzer.py
-
-import os
 import json
-import joblib
-import numpy as np
+import logging
+import os
+import time
+
 import paho.mqtt.client as mqtt
-import datetime
 
-# --- Configuration ---
+from alert_store import persist_maintenance_alert
+from model_utils import MODEL_PATH, ensure_model
+from telemetry_handler import ALERT_TOPIC, process_telemetry
+
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s edge-analyzer %(message)s",
+)
+logger = logging.getLogger("edge-analyzer")
+
 MQTT_BROKER_HOST = os.environ.get("MQTT_BROKER_HOST", "localhost")
-
 MQTT_BROKER_PORT = int(os.environ.get("MQTT_BROKER_PORT", 1883))
 RAW_DATA_TOPIC = "harboursense/telemetry/crane/+/raw"
-ALERT_TOPIC = "harboursense/alerts/maintenance"
-MODEL_PATH = 'anomaly_model.pkl'
+RECONNECT_DELAY_SECONDS = int(os.environ.get("MQTT_RECONNECT_DELAY_SECONDS", "5"))
 
-# --- Load the pre-trained Isolation Forest model ---
-try:
-    model = joblib.load(MODEL_PATH)
-    print(f"Successfully loaded anomaly detection model from {MODEL_PATH}")
-except FileNotFoundError:
-    print(f"FATAL: Model file not found at {MODEL_PATH}. Ensure the model is in the same directory.")
-    exit()
+malformed_payload_count = 0
+anomaly_alert_count = 0
+model = None
 
-# --- MQTT Event Handlers ---
-def on_connect(client, userdata, flags, rc):
-    """Callback for when the client connects to the broker."""
-    if rc == 0:
-        print("EdgeAnalyzer connected successfully to MQTT Broker!")
+
+def load_model():
+    global model
+    if not os.path.exists(MODEL_PATH):
+        logger.warning("Model file missing at %s; generating synthetic training artifact", MODEL_PATH)
+    model = ensure_model(MODEL_PATH)
+    logger.info("Anomaly model loaded from %s", MODEL_PATH)
+
+
+def on_connect(client, userdata, flags, reason_code, properties=None):
+    if reason_code == 0:
+        logger.info("Connected to MQTT broker %s:%s", MQTT_BROKER_HOST, MQTT_BROKER_PORT)
         client.subscribe(RAW_DATA_TOPIC)
-        print(f"Subscribed to raw data topic: {RAW_DATA_TOPIC}")
-    else:
-        print(f"Failed to connect, return code {rc}\n")
+        logger.info("Subscribed to %s", RAW_DATA_TOPIC)
+        return
+    logger.error("MQTT connect failed with reason code %s", reason_code)
+
+
+def on_disconnect(client, userdata, disconnect_flags, reason_code, properties=None):
+    logger.warning("Disconnected from MQTT broker (reason=%s); retrying in %ss", reason_code, RECONNECT_DELAY_SECONDS)
+
 
 def on_message(client, userdata, msg):
-    """Callback for when a message is received."""
+    global malformed_payload_count, anomaly_alert_count
+
     try:
         data = json.loads(msg.payload)
-        
-        # Ensure message contains the necessary features
-        if all(k in data for k in ['motorTemp', 'vibration', 'energyUse']):
-            features = np.array([[data['motorTemp'], data['vibration'], data['energyUse']]])
-            prediction = model.predict(features)
+    except json.JSONDecodeError as error:
+        malformed_payload_count += 1
+        logger.warning(
+            "Malformed telemetry JSON topic=%s error=%s malformedCount=%s",
+            msg.topic,
+            error,
+            malformed_payload_count,
+        )
+        return
 
-            # If the model predicts an anomaly (value of -1)
-            if prediction[0] == -1:
-                crane_id = data.get('craneId', 'unknown_crane')
-                print(f"!!! Anomaly Detected for {crane_id} !!! Publishing alert.")
-                
-                alert_payload = {
-                    "assetId": crane_id,
-                    "alertType": "PREDICTIVE_MAINTENANCE_REQUIRED",
-                    "reason": "Anomalous motor telemetry detected by EdgeAnalyzer.",
-                    "timestamp": datetime.datetime.utcnow().isoformat() + "Z", # ISO 8601 format
-                    "telemetry": data
-                }
-                
-                # Publish the structured alert to the cloud-facing topic
-                client.publish(ALERT_TOPIC, json.dumps(alert_payload), qos=1)
-                
-    except (json.JSONDecodeError, KeyError) as e:
-        # Silently ignore malformed messages
-        pass
+    try:
+        alert_payload, _ = process_telemetry(data, model)
+    except (KeyError, ValueError, TypeError) as error:
+        malformed_payload_count += 1
+        logger.warning(
+            "Invalid telemetry payload topic=%s error=%s malformedCount=%s",
+            msg.topic,
+            error,
+            malformed_payload_count,
+        )
+        return
 
-# --- Main Execution Block ---
-if __name__ == "__main__":
-    client = mqtt.Client()
+    if alert_payload:
+        anomaly_alert_count += 1
+        logger.warning(
+            "Anomaly detected craneId=%s topic=%s alertCount=%s",
+            alert_payload.get("assetId", "unknown_crane"),
+            msg.topic,
+            anomaly_alert_count,
+        )
+        client.publish(ALERT_TOPIC, json.dumps(alert_payload), qos=1)
+        persist_maintenance_alert(alert_payload)
+
+
+def main():
+    load_model()
+
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
     client.on_message = on_message
 
-    print(f"Connecting to MQTT broker at {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}...")
-    client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+    while True:
+        try:
+            logger.info("Connecting to MQTT broker at %s:%s", MQTT_BROKER_HOST, MQTT_BROKER_PORT)
+            client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+            client.loop_forever()
+        except Exception as error:
+            logger.error("MQTT connection error: %s; retrying in %ss", error, RECONNECT_DELAY_SECONDS)
+            time.sleep(RECONNECT_DELAY_SECONDS)
 
-    # Blocking call that processes network traffic, dispatches callbacks, and handles reconnecting.
-    client.loop_forever()
+
+if __name__ == "__main__":
+    main()

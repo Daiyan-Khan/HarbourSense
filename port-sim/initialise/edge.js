@@ -1,20 +1,16 @@
 const { MongoClient } = require('mongodb');
-const awsIot = require('aws-iot-device-sdk');
-const path = require('path');
+const { createMqttDevice, getMongoSettings, getMqttBrokerLabel } = require('../runtime-config');
 
-const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';
-const device = awsIot.device({
-  keyPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key'),
-  certPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt'),
-  caPath: path.join(__dirname, 'certs/AmazonRootCA1.pem'),
-  clientId: 'edge_simulator',
-  host: 'a1dghi6and062t-ats.iot.us-east-1.amazonaws.com'
-});
+const device = createMqttDevice('edge_simulator');
+console.log(`Edge simulator MQTT target: ${getMqttBrokerLabel()}`);
 
 async function edgeAutonomousLoop(edgeId) {
-  const client = new MongoClient(uri);
+  const mongoSettings = getMongoSettings();
+  const client = new MongoClient(mongoSettings.uri, {
+    serverSelectionTimeoutMS: mongoSettings.serverSelectionTimeoutMS,
+  });
   await client.connect();
-  const db = client.db('port');
+  const db = client.db(mongoSettings.databaseName);
   const edgesCol = db.collection('edges');
 
   // Subscribe to MQTT for task updates (e.g., new route assignments)

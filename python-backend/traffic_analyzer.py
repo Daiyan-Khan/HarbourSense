@@ -11,7 +11,7 @@ import heapq
 from math import inf  # For infinite distances (float('inf') alternative)
 from motor.motor_asyncio import AsyncIOMotorClient  # If needed for DB in analyzer
 from pymongo.operations import UpdateOne  # FIXED: Correct import for bulk ops
-import ssl
+from mqtt_config import build_aiomqtt_params, get_mqtt_settings
 def convert_bson_numbers(obj):
     """
     Recursively converts BSON types (e.g., ObjectId to str, Int64 to int) for JSON serialization.
@@ -44,6 +44,12 @@ def node_to_coords(node):  # Add if missing
     y = ord(letter) - ord('A')
     x = int(number)
     return (y, x)
+
+NULL_NODE_SENTINELS = {None, "Null", "null", "None", "undefined", ""}
+
+
+def is_missing_node(value):
+    return value in NULL_NODE_SENTINELS
 
 # Parse graph list into dict format (fallback if DB empty)
 def parse_graph(graph_list):
@@ -153,10 +159,10 @@ class SmartRoutePlanner:
         if predicted_loads is None:
             predicted_loads = {}
         # FIXED: Scrub Null/None destinations (from idle edges)
-        if end in ['Null', 'null', None, 'None']:
+        if is_missing_node(end):
             logger.warning(f"Invalid end node {end} (likely idle default); fallback to 'C5'")
             end = 'C5'
-        if start in ['Null', 'null', None, 'None']:
+        if is_missing_node(start):
             logger.warning(f"Invalid start node {start}; fallback to 'A1'")
             start = 'A1'
         if start == end:
@@ -267,21 +273,10 @@ class TrafficAnalyzer:
     async def _ensure_connected(self):
         """Ensure MQTT client is connected; create if None."""
         if self.mqtt_client is None:
-            # Hardcode params from manager.py (minimal, no param passing needed)
-            tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-            tls_context.load_verify_locations(cafile="../certs/AmazonRootCA1.pem")
-            tls_context.load_cert_chain(
-                certfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt",
-                keyfile="../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key"
-            )
-            self.mqtt_client = aiomqtt.Client(
-                hostname="a1dghi6and062t-ats.iot.us-east-1.amazonaws.com",
-                port=8883,
-                identifier="traffic_analyzer",  # Unique to avoid conflicts
-                tls_context=tls_context
-            )
+            mqtt_settings = get_mqtt_settings()
+            self.mqtt_client = aiomqtt.Client(**build_aiomqtt_params("traffic_analyzer"))
             await self.mqtt_client.__aenter__()  # Connect explicitly
-            logger.info("TrafficAnalyzer: Created and connected new MQTT client")
+            logger.info(f"TrafficAnalyzer: Created MQTT client in {mqtt_settings.mode} mode")
         else:
             # Existing check (safe now, as None handled above)
             try:
@@ -293,30 +288,6 @@ class TrafficAnalyzer:
                 await self.mqtt_client.__aenter__()
         return self.mqtt_client
 
-    # FIXED: start_mqtt_listener (around line 650) - Use created client with reconnection loop
-    async def start_mqtt_listener(self):
-        """Start listener for edge positions; reconnects if drops."""
-        retry_delay = 5
-        while True:
-            try:
-                await self._ensure_connected()  # FIXED: Now safe, creates/reconnects client
-                # Subscribe once (re-sub on reconnect via ensure_connected)
-                await self.mqtt_client.subscribe("harboursense/edge/position/+")
-                logger.info("TrafficAnalyzer: Subscribed to edge positions")
-
-                async for message in self.mqtt_client.messages:
-                    await self._handle_position_update(message)  # Your existing handler (e.g., parse position, trigger analyze_metrics)
-
-            except aiomqtt.MqttError as e:
-                logger.warning(f"TrafficAnalyzer MQTT error (disconnected?): {e}. Retrying in {retry_delay}s...")
-                if hasattr(self, 'mqtt_client') and self.mqtt_client:
-                    await self.mqtt_client.__aexit__(None, None, None)  # Clean close
-                    self.mqtt_client = None  # Reset for recreate
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 1.5, 60)  # Backoff
-            except Exception as e:
-                logger.error(f"Unexpected error in TrafficAnalyzer listener: {e}")
-                await asyncio.sleep(retry_delay)
     async def analyze_metrics(self, triggered_by=""):
         """Analyze traffic from DB, update internal state, compute congestion/loads. Enhanced with sensor alerts for predictions."""
         logger.info(f"Starting analysis, triggered by {triggered_by}")
@@ -374,18 +345,18 @@ class TrafficAnalyzer:
                 continue
 
             current_loc_raw = edge.get('currentLocation')
-            if current_loc_raw is None or current_loc_raw in ["Null", "null", None]:
+            if is_missing_node(current_loc_raw):
                 current_loc = "na"  # Placeholder for idle
             else:
                 current_loc = str(current_loc_raw).replace("-", "")  # Standardize
 
             next_node_raw = edge.get('nextNode')
-            if next_node_raw is None or next_node_raw in ["Null", "null", None]:
-                next_node = "Null"  # Placeholder for idle; no next
+            if is_missing_node(next_node_raw):
+                next_node = None
             else:
                 next_node = str(next_node_raw).replace("-", "")  # Standardize
 
-            if next_node == "Null":  # Handle placeholder as no next node
+            if next_node is None:
                 continue
 
             route_key = f"{current_loc}-{next_node}"
@@ -393,17 +364,16 @@ class TrafficAnalyzer:
             node_loads[current_loc] = node_loads.get(current_loc, 0) + 1
 
             # FIXED: Safe get/None scrub for all node fields (get returns None if key=None, so explicit check)
-            if 'eta' in edge and edge.get('eta') != "NA" and next_node != "Null":
+            if 'eta' in edge and edge.get('eta') != "NA" and next_node is not None:
                 if next_node in warehouses:  # Wh-only pred inc (focus)
                     predicted_loads[next_node] += 1  # Predict arrival load
 
             if 'finalNode' in edge and 'journeyTime' in edge:
                 final_node_raw = edge.get('finalNode')
-                if final_node_raw is not None and final_node_raw not in ["None", "Null", "null"] and edge.get('journeyTime') != "NA" and edge['journeyTime'] < 60:  # Near-term with string checks
-                    if final_node_raw in ["Null", None]:  # FIXED: Explicit scrub
-                        final_node_raw = "na"
+                journey_time = self.planner.safe_float(edge.get('journeyTime'), inf)
+                if not is_missing_node(final_node_raw) and journey_time < 60:  # Near-term with string checks
                     final_node = str(final_node_raw).replace("-", "")  # Standardize, safe
-                    if final_node not in ["None", "Null"]:  # FIXED: Skip Null predictions
+                    if not is_missing_node(final_node):  # FIXED: Skip Null predictions
                         if final_node in warehouses:  # Wh-only
                             predicted_loads[final_node] += 1  # Predict future loads based on ETA and finalNode with string checks
 
@@ -439,13 +409,13 @@ class TrafficAnalyzer:
                 continue  # Idle-only
 
             current_node_raw = edge.get('currentLocation')
-            if current_node_raw is None or current_node_raw in ["Null", "null", None]:
+            if is_missing_node(current_node_raw):
                 current_node = "na"
             else:
                 current_node = str(current_node_raw).replace("-", "")  # Standardize
 
             destination_raw = edge.get('finalNode')
-            if destination_raw is None or destination_raw in ["None", "Null", "null", None, "null"]:
+            if is_missing_node(destination_raw):
                 logger.debug(f"Skipping idle edge {edge.get('id')} with Null finalNode (no route needed)")
                 continue  # FIXED: No path computation for undefined idle
 
@@ -488,7 +458,7 @@ class TrafficAnalyzer:
                 best_eta = sum(1 for i in range(len(suggested_path) - 1)) / edge.get('speed', 10)  # Simple unit weight ETA
 
             # Ultimate fallback
-            next_node_val = best_node if best_node is not None else "Null"
+            next_node_val = best_node if best_node is not None else None
             eta_val = best_eta if best_eta != "NA" else "NA"
             bulk_ops.append(UpdateOne({"id": edge["id"]}, {"$set": {"nextNode": next_node_val, "eta": eta_val, "suggestedPath": suggested_path}}))  # FIXED: Use UpdateOne directly
 
@@ -574,7 +544,7 @@ class TrafficAnalyzer:
                     if edge_doc:
                         destination_raw = edge_doc.get('finalNode') or edge_doc.get('destinationNode', 'C5')
                         # FIXED: Scrub Null/None variants
-                        if destination_raw in ['Null', None, 'null', 'None', 'undefined', '']:
+                        if is_missing_node(destination_raw):
                             destination = 'C5'
                             logger.debug(f"Scrubbed invalid destination for {edge_id}; fallback to {destination}")
                         else:
@@ -619,10 +589,4 @@ class TrafficAnalyzer:
             except Exception as e:
                 logger.error(f"Unexpected MQTT error on {topic_str}: {e}; continuing...")
             
-            # FIXED: Reconnect only on disconnects (not every message) - let aiomqtt handle minor issues
-            if not self.mqtt_client.is_connected():  # Assume you have this check; else add await self._ensure_connected() every 10 msgs
-                logger.warning("MQTT disconnected; attempting reconnect...")
-                await self._ensure_connected()
-                await self.mqtt_client.subscribe(subscribe_topic)  # Re-subscribe post-reconnect
-
         logger.info("MQTT listener ended (e.g., on shutdown)")

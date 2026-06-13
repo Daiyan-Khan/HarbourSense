@@ -7,9 +7,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code,
-# INCLUDING edge-analyzer.py and anomaly_model.pkl
+# Copy the rest of the application code
 COPY . .
 
-# Run the analyzer script
+# Generate a model artifact during image build when one is not committed
+RUN rm -f anomaly_model.pkl && python create_model.py
+
 CMD ["python", "edge-analyzer.py"]

@@ -405,17 +405,15 @@ class TaskAssigner:
         node_loads = self.analyzer.get_current_loads() if self.analyzer else {}
         route_congestion = self.analyzer.get_route_congestion() if self.analyzer else {}
         predicted_loads = self.analyzer.get_predicted_loads() if self.analyzer else {}
+        planner = getattr(self.analyzer, 'planner', None) if self.analyzer else None
         
         candidates = []
         try:
             # Scan idle devices of type (add location filter if needed, e.g., near wh for store)
             query = {'taskPhase': 'idle', 'type': device_type}
-            if phase == 'offload': query['currentLocation'] = {'$in': ['A1', 'A2', 'A3']}  # Dock cranes only
-            elif phase == 'delivery': query['currentLocation'] = {'$in': ['B4', 'D2', 'E5']}  # Wh trucks
-            elif 'store' in phase: query['currentLocation'] = {'$in': ['B4', 'D2', 'E5']}  # Robots/forklifts at wh
             
             idle_devices = await self.db.edgeDevices.find(query).to_list(None)
-            logger.debug(f"Found {len(idle_devices)} idle {device_type} for {phase} near {required_place}")
+            logger.debug(f"Found {len(idle_devices)} idle {device_type} for {phase}; selecting nearest to {required_place}")
             
             for device in idle_devices:
                 try:
@@ -426,15 +424,23 @@ class TaskAssigner:
                     # Path if mobile + final_node (crane offload: no path, stationary)
                     path = None
                     if final_node and device_type != 'crane':  # Skip path for stationary offload
-                        path = SmartRoutePlanner.compute_path(
-                            start_node, final_node, 
-                            node_loads, route_congestion, 
-                            predicted_loads=predicted_loads  # Optional
-                        )
-                        if not path or len(path) < 2:
-                            logger.warning(f"Invalid path for {device_id} {start_node}→{final_node}; skip candidate")
+                        path_start = current_loc if phase in ('store_move', 'store_load', 'transport', 'delivery') else start_node
+                        if path_start == final_node:
+                            path = [final_node]
+                        else:
+                            path = planner.compute_path(
+                                path_start, final_node,
+                                node_loads, route_congestion,
+                                predicted_loads=predicted_loads
+                            ) if planner else self._a_star_fallback(path_start, final_node)
+                        if not path:
+                            logger.warning(f"Invalid path for {device_id} {path_start}→{final_node}; skip candidate")
                             continue
-                        dist += sum(self._edge_weight(p) for p in path[1:])  # Optional: Path cost add
+                        if len(path) < 2 and path_start != final_node:
+                            logger.warning(f"Invalid path for {device_id} {path_start}→{final_node}; skip candidate")
+                            continue
+                        if len(path) > 1:
+                            dist += sum(self._edge_weight(p) for p in path[1:])
                     else:
                         path = [start_node, final_node] if final_node else [required_place]  # Simple for stationary
                     
@@ -447,8 +453,8 @@ class TaskAssigner:
             
             if candidates:
                 # Nearest (min dist)
-                nearest_id, _, best_path, nearest_device = min(candidates, key=lambda x: x[1])
-                logger.info(f"Assigned nearest {device_type} {nearest_id} for {shipment_id} {phase} (dist={candidates[0][1]:.1f})")
+                nearest_id, nearest_dist, best_path, nearest_device = min(candidates, key=lambda x: x[1])
+                logger.info(f"Assigned nearest {device_type} {nearest_id} for {shipment_id} {phase} (dist={nearest_dist:.1f})")
                 
                 # Update edge (set path, task, shipment)
                 task = {
@@ -836,15 +842,16 @@ class TaskAssigner:
 
     # Add if missing: Warehouse check helper (in task_assigner.py or here)
     def _is_warehouse(self, node):
-        """Check if node is warehouse (B4/D2/E5)."""
-        warehouses = ['B4', 'D2', 'E5']
-        return node in warehouses
+        """Check if node is a warehouse using the loaded graph, with seed fallback."""
+        if node in self.graph:
+            return self.graph[node].get('type') == 'warehouse'
+        return node in ['B4', 'D2', 'E5']
 
 
     async def _select_warehouse(self, current_node, shipment_id):
         """... (existing)"""
         if not self.graph:
-            return 'C5'  # Fallback (no C5 in test-graph? Use B4)
+            return 'B4'
         
         warehouses = {nid: ndata for nid, ndata in self.graph.items() if ndata.get('type') == 'warehouse'}  # B4=3, D2=2, E5=35
         if not warehouses:

@@ -1,0 +1,144 @@
+name: HarbourSense CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: python -m pip install -r python-backend/requirements.txt
+      - name: Python compile check
+        run: python -m py_compile python-backend/*.py python-backend/tests/test_*.py
+      - name: Backend unit tests
+        run: python -m unittest discover -s python-backend/tests -p "test_*.py"
+
+  port-sim-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install port-sim dependencies
+        run: npm ci
+        working-directory: port-sim
+      - name: Port-sim syntax check
+        run: node --check port.js
+        working-directory: port-sim
+      - name: Port-sim contract tests
+        run: npm test
+        working-directory: port-sim
+
+  dashboard-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard/visualizer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dashboard dependencies
+        run: npm ci
+      - name: Dashboard unit tests
+        run: npm test -- --watchAll=false
+      - name: Dashboard production build
+        run: npm run build
+
+  edge-analyzer-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge-analyzer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install edge-analyzer dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Edge analyzer unit tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker compose config
+        run: docker compose config --services
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build service images
+        run: |
+          docker compose build backend portsim dashboard edge-analyzer mongo-seed
+      - name: Verify built images exist
+        run: docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'harboursense|edge-analyzer|backend|portsim|dashboard|mongo-seed' || true
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail on MongoDB Atlas SRV literals in source
+        run: |
+          if grep -RIn "mongodb+srv://" --exclude-dir=.git .; then
+            echo "Found mongodb+srv literals"
+            exit 1
+          fi
+      - name: Fail on AWS IoT host literals in source
+        run: |
+          if grep -RInE "\\.iot\\.[^./]+\\.amazonaws\\.com" --exclude-dir=.git .; then
+            echo "Found AWS IoT host literals"
+            exit 1
+          fi
+
+  mqtt-broker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install port-sim dependencies
+        run: npm ci
+        working-directory: port-sim
+      - name: Start local Mosquitto broker
+        run: docker compose up -d mqtt
+      - name: Wait for Mosquitto port
+        run: |
+          for i in $(seq 1 30); do
+            if nc -z localhost 1883; then
+              echo "Mosquitto is listening on 1883"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mosquitto did not become ready in time"
+          docker compose logs mqtt || true
+          exit 1
+      - name: Broker contract smoke script
+        run: node scripts/smoke-mqtt-broker.mjs --broker mqtt://localhost:1883
+      - name: Port-sim broker integration test
+        run: npm run test:mqtt-broker
+        working-directory: port-sim
+        env:
+          MQTT_BROKER_SMOKE: "1"
+          MQTT_BROKER_HOST: localhost
+          MQTT_BROKER_PORT: "1883"

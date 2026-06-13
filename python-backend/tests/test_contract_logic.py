@@ -75,12 +75,30 @@ class FakeAnalyzer:
     def __init__(self, predicted_loads=None):
         self._predicted_loads = predicted_loads or {}
         self.analysis_triggers = []
+        self.planner = self
 
     def get_predicted_loads(self):
         return self._predicted_loads
 
+    def get_current_loads(self):
+        return {}
+
+    def get_route_congestion(self):
+        return {}
+
+    def compute_path(self, start, end, node_loads, route_congestion, predicted_loads=None):
+        return [start] if start == end else [start, end]
+
     async def analyze_metrics(self, triggered_by=""):
         self.analysis_triggers.append(triggered_by)
+
+
+class FakeCursor:
+    def __init__(self, docs):
+        self.docs = docs
+
+    async def to_list(self, length):
+        return self.docs
 
 
 class FakeCollection:
@@ -95,6 +113,21 @@ class FakeCollection:
             if all(doc.get(key) == value for key, value in query.items()):
                 return doc
         return None
+
+    def find(self, query=None):
+        query = query or {}
+        matches = []
+        for doc in self.docs.values():
+            matched = True
+            for key, value in query.items():
+                if isinstance(value, dict) and "$in" in value:
+                    matched = doc.get(key) in value["$in"]
+                elif doc.get(key) != value:
+                    matched = False
+                    break
+            if matched:
+                matches.append(doc)
+        return FakeCursor(matches)
 
     async def update_one(self, query, update, upsert=False, array_filters=None):
         doc_id = query.get("id")
@@ -192,6 +225,8 @@ class TrafficAnalyzerHelperTests(unittest.TestCase):
         self.assertEqual(planner.safe_float({"bad": "shape"}, 2.5), 2.5)
         self.assertEqual(planner.safe_float("3.5"), 3.5)
         self.assertEqual(planner.compute_path(None, "A2", {}, {}), ["A1", "A2"])
+        self.assertTrue(traffic_analyzer.is_missing_node("Null"))
+        self.assertTrue(traffic_analyzer.is_missing_node(None))
 
 
 class TaskAssignerHelperTests(unittest.IsolatedAsyncioTestCase):
@@ -213,6 +248,17 @@ class TaskAssignerHelperTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(graph["B4"]["currentOccupancy"], 0)
         self.assertEqual(graph["A1"]["currentOccupancy"], 0)
+
+    def test_is_warehouse_uses_loaded_graph(self):
+        assigner = self.make_assigner(
+            [
+                {"id": "W1", "neighbors": {}, "type": "warehouse"},
+                {"id": "B4", "neighbors": {}, "type": "route_point"},
+            ]
+        )
+
+        self.assertTrue(assigner._is_warehouse("W1"))
+        self.assertFalse(assigner._is_warehouse("B4"))
 
     def test_phase_chain_matches_shared_contract(self):
         assigner = self.make_assigner(task_assigner.GRAPH_LIST)
@@ -245,6 +291,45 @@ class TaskAssignerHelperTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await assigner._select_warehouse("C3", "shipment-1"), "D2")
 
+    async def test_assign_stage_device_uses_graph_seed_locations(self):
+        db = types.SimpleNamespace(
+            edgeDevices=FakeCollection([
+                {
+                    "id": "crane_seeded",
+                    "type": "crane",
+                    "taskPhase": "idle",
+                    "currentLocation": "B5",
+                    "speed": 4,
+                }
+            ]),
+            shipments=FakeCollection([
+                {
+                    "id": "shipment_seeded",
+                    "status": "arrived",
+                    "currentNode": "C1",
+                    "assignedEdges": [],
+                }
+            ]),
+        )
+        graph_data = [
+            {"id": "B5", "neighbors": {}, "type": "dock"},
+            {"id": "C1", "neighbors": {}, "type": "dock"},
+        ]
+        assigner = task_assigner.TaskAssigner(db=db, mqtt_client=None, analyzer=FakeAnalyzer(), graph=graph_data)
+
+        assigned = await assigner._assign_stage_device(
+            "shipment_seeded",
+            "offload",
+            {"shipmentId": "shipment_seeded", "destNode": "C1"},
+        )
+
+        self.assertEqual(assigned, "crane_seeded")
+        edge = db.edgeDevices.docs["crane_seeded"]
+        shipment = db.shipments.docs["shipment_seeded"]
+        self.assertEqual(edge["taskPhase"], "en_route_start")
+        self.assertEqual(edge["startNode"], "C1")
+        self.assertTrue(task_assigner.has_assigned_phase(shipment["assignedEdges"], "offload"))
+
     async def test_store_load_completion_is_idempotent(self):
         db = FakeDb()
         analyzer = FakeAnalyzer()
@@ -267,6 +352,87 @@ class TaskAssignerHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(warehouse["currentOccupancy"], 1)
         self.assertEqual(edge["taskPhase"], "idle")
         self.assertIsNone(edge["shipmentId"])
+
+    async def test_offload_completion_duplicate_does_not_regress_status(self):
+        db = types.SimpleNamespace(
+            edgeDevices=FakeCollection([
+                {
+                    "id": "crane001",
+                    "type": "crane",
+                    "taskPhase": "completing",
+                    "shipmentId": "shipment_offload",
+                    "assignedShipment": "shipment_offload",
+                    "currentLocation": "C3",
+                    "finalNode": "C3",
+                    "task": {"shipmentId": "shipment_offload", "phase": "offload", "finalNode": "C3"},
+                }
+            ]),
+            shipments=FakeCollection([
+                {
+                    "id": "shipment_offload",
+                    "status": "arrived",
+                    "assignedEdges": [
+                        task_assigner.make_assigned_edge("crane001", "offload", assigned_at="assigned", completed_at=None)
+                    ],
+                }
+            ]),
+            graph=FakeCollection([]),
+        )
+        assigner = task_assigner.TaskAssigner(db=db, mqtt_client=None, analyzer=FakeAnalyzer(), graph=task_assigner.GRAPH_LIST)
+        payload = {
+            "shipmentId": "shipment_offload",
+            "phase": "offload",
+            "location": "C3",
+            "completedAt": "first",
+        }
+
+        await assigner.handle_completion("crane001", payload)
+        await assigner.handle_completion("crane001", payload)
+
+        shipment = db.shipments.docs["shipment_offload"]
+        self.assertEqual(shipment["status"], "offloaded")
+        self.assertEqual(len(shipment["assignedEdges"]), 1)
+        self.assertEqual(shipment["assignedEdges"][0]["completedAt"], "first")
+
+    async def test_transport_completion_duplicate_keeps_single_assignment(self):
+        db = types.SimpleNamespace(
+            edgeDevices=FakeCollection([
+                {
+                    "id": "truck_tempo_1",
+                    "type": "truck_tempo",
+                    "taskPhase": "completing",
+                    "shipmentId": "shipment_transport",
+                    "assignedShipment": "shipment_transport",
+                    "currentLocation": "D2",
+                    "finalNode": "D2",
+                    "task": {"shipmentId": "shipment_transport", "phase": "transport", "finalNode": "D2"},
+                }
+            ]),
+            shipments=FakeCollection([
+                {
+                    "id": "shipment_transport",
+                    "status": "offloaded",
+                    "assignedEdges": [
+                        task_assigner.make_assigned_edge("truck_tempo_1", "transport", assigned_at="assigned", completed_at=None)
+                    ],
+                }
+            ]),
+            graph=FakeCollection([]),
+        )
+        assigner = task_assigner.TaskAssigner(db=db, mqtt_client=None, analyzer=FakeAnalyzer(), graph=task_assigner.GRAPH_LIST)
+        payload = {
+            "shipmentId": "shipment_transport",
+            "phase": "transport",
+            "location": "D2",
+            "completedAt": "transported-at",
+        }
+
+        await assigner.handle_completion("truck_tempo_1", payload)
+        await assigner.handle_completion("truck_tempo_1", payload)
+
+        shipment = db.shipments.docs["shipment_transport"]
+        self.assertEqual(shipment["status"], "transported")
+        self.assertEqual(len(shipment["assignedEdges"]), 1)
 
 
 if __name__ == "__main__":

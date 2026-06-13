@@ -1,21 +1,23 @@
 import asyncio
 import json
 import paho.mqtt.client as mqtt
-from motor.motor_asyncio import AsyncIOMotorClient
+from backend_config import MongoConfigError, get_mongo_database, get_mongo_settings
+from mqtt_config import MqttConfigError, configure_paho_client
 
 # MongoDB setup
-MONGO_DETAILS = "mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net"
-mongo_client = AsyncIOMotorClient(MONGO_DETAILS)
-db = mongo_client.port
+try:
+    mongo_settings = get_mongo_settings()
+    db = get_mongo_database(mongo_settings)
+except MongoConfigError as exc:
+    raise RuntimeError(f"Invalid MongoDB configuration for MQTT subscriber startup: {exc}") from None
 data_col = db.sensorData
 
 # MQTT setup
 client = mqtt.Client(client_id="python_subscriber")
-client.tls_set(
-    ca_certs='../certs/AmazonRootCA1.pem',
-    certfile='../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt',
-    keyfile='../certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key'
-)
+try:
+    mqtt_settings = configure_paho_client(client)
+except MqttConfigError as exc:
+    raise RuntimeError(f"Invalid MQTT configuration for subscriber startup: {exc}") from None
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -35,7 +37,7 @@ client.on_connect = on_connect
 client.on_message = on_message
 
 try:
-    client.connect("a1dghi6and062t-ats.iot.us-east-1.amazonaws.com", 8883, 60)
+    client.connect(mqtt_settings.host, mqtt_settings.port, 60)
 except Exception as e:
     print(f"Connection error: {e}")
 

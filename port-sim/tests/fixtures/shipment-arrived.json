@@ -1,0 +1,9 @@
+{
+  "id": "shipment-smoke-1",
+  "arrivalNode": "A1",
+  "currentNode": "A1",
+  "destination": "D2",
+  "status": "arrived",
+  "createdAt": "2026-06-12T09:55:00.000Z",
+  "updatedAt": "2026-06-12T09:55:00.000Z"
+}

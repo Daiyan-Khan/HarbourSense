@@ -1,0 +1,11 @@
+{
+  "assetId": "crane001",
+  "alertType": "predictive_maintenance",
+  "reason": "anomaly detected in motor temperature",
+  "timestamp": "2026-06-12T10:00:00.000Z",
+  "telemetry": {
+    "motorTemp": 105.2,
+    "vibration": 0.9,
+    "energyUse": 140
+  }
+}

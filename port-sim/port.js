@@ -1,7 +1,21 @@
 const fs = require('fs');
 const { MongoClient } = require('mongodb');
-const awsIot = require('aws-iot-device-sdk');
-const path = require('path');
+const {
+  createMongoClient,
+  createMqttDevice,
+  getMongoSettings,
+  getMqttBrokerLabel,
+  getSimulatorSettings,
+  pickShipmentIntervalMs,
+} = require('./runtime-config');
+const {
+  craneTelemetryTopic,
+  validateCraneTelemetryPayload,
+} = require('./lib/mqtt-contract');
+const {
+  buildCraneTelemetryPayload,
+  isCraneActive,
+} = require('./lib/crane-telemetry');
 
 
 // Setup logging to log.txt
@@ -22,17 +36,10 @@ console.error = function(...args) {
 };
 
 
-const uri = 'mongodb+srv://kdaiyan1029_db_user:Lj1dBUioaDGT2K6S@sit314.kzzkjxh.mongodb.net';
-
-
-const device = awsIot.device({
-  keyPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-privat.key'),  // Your file name
-  certPath: path.join(__dirname, 'certs/8ba3789f5cbeb11db4ffe8f3a8223725e7242e6417aade8ac33929221b997a92-certificate.pem.crt'),
-  caPath: path.join(__dirname, 'certs/AmazonRootCA1.pem'),
-  clientId: 'port_simulator',
-  host: 'a1dghi6and062t-ats.iot.us-east-1.amazonaws.com',
-  offlineQueueMaxSize: 0
-});
+const mongoSettings = getMongoSettings();
+const simulatorSettings = getSimulatorSettings();
+const device = createMqttDevice('port_simulator');
+const mqttBrokerLabel = getMqttBrokerLabel();
 
 
 // Global cache for traffic suggestions and paths from MQTT
@@ -61,6 +68,12 @@ const TaskPhase = Object.freeze({
   ASSIGNED: 'assigned',
   COMPLETING: 'completing'
 });
+
+const NULL_SENTINELS = new Set([null, undefined, 'Null', 'null', 'None', 'undefined', '']);
+
+function isNullSentinel(value) {
+  return NULL_SENTINELS.has(value);
+}
 
 
 // FIXED: Default idle attributes (null instead of 'Null' for better Mongo handling)
@@ -108,7 +121,7 @@ function transitionToEn_routeStart(currentEdge, taskData) {
     startNode: taskData.startNode || null,
     finalNode: taskData.finalNode || null,
     path: taskData.path || [],
-    eta: 'N/A',
+    eta: null,
     journeyTime: 0,
     shipmentId: taskData.shipmentId || null
   };
@@ -137,8 +150,8 @@ function transitionToCompleting(currentEdge) {
     taskPhase: TaskPhase.COMPLETING,
     nextNode: null,
     finalNode: null,
-    eta: 'N/A',
-    journeyTime: 'N/A',
+    eta: null,
+    journeyTime: null,
     path: [],
     shipmentId: currentEdge.shipmentId
   };
@@ -342,9 +355,15 @@ async function simulateMovement(edgeId, db, device) {
 
 
   if (suggestion.suggestedPath && Array.isArray(suggestion.suggestedPath) && suggestion.suggestedPath.length > 0) {
-    await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: suggestion.suggestedPath } });
-    console.log(`[DEBUG SIM] Overrode path for ${edgeId} with MQTT suggestion: ${suggestion.suggestedPath.join(' -> ')}`);
-    edge.path = suggestion.suggestedPath;
+    const [suggestedStart] = suggestion.suggestedPath;
+    if (suggestedStart === edge.currentLocation) {
+      await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: suggestion.suggestedPath } });
+      console.log(`[DEBUG SIM] Applied path suggestion for ${edgeId}: ${suggestion.suggestedPath.join(' -> ')}`);
+      edge.path = suggestion.suggestedPath;
+    } else {
+      console.warn(`[DEBUG SIM] Ignored stale path suggestion for ${edgeId}: starts at ${suggestedStart}, current is ${edge.currentLocation}`);
+    }
+    delete suggestionsByEdge[edgeId];
   }
 
 
@@ -415,7 +434,7 @@ async function simulateMovement(edgeId, db, device) {
 
 
   const startTime = Date.now();
-  const updateInterval = 1000;
+  const updateInterval = simulatorSettings.simProgressIntervalMs;
 
 
   let intervalId = setInterval(() => {
@@ -530,7 +549,7 @@ async function edgeAutonomousLoop(edgeId, db, device) {
 
     if (!edge) {  // FIXED: Null check
       console.log(`[DEBUG LOOP] Edge ${edgeId} not found; skipping loop`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simEdgeMissingDelayMs));
       continue;
     }
 
@@ -546,8 +565,7 @@ async function edgeAutonomousLoop(edgeId, db, device) {
 
     if (state === TaskPhase.IDLE) {
       console.log(`[DEBUG LOOP] Edge ${edgeId} idle - staying at ${edge.currentLocation}, awaiting task.`);
-      await new Promise(resolve => setTimeout(resolve, 5000));
-    } else if (state === TaskPhase.EN_ROUTE_START || state === TaskPhase.ASSIGNED) {
+      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simLoopIdleDelayMs));
       if (edge.path && edge.path.length > 0) {
         await simulateMovement(edgeId, db, device);
         moveCount++;
@@ -607,22 +625,53 @@ async function edgeAutonomousLoop(edgeId, db, device) {
 
 
       await executeTask(edgeId, db, device, freshEdge, taskData, steps);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simCompletingDelayMs));
     } else {
       console.warn(`[DEBUG LOOP] Unknown state ${state} for ${edgeId} - forcing IDLE`);
       await updateEdgeState(db, edgeId, transitionToIdle(edge));
     }
 
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, simulatorSettings.simLoopTickMs));
+  }
+}
+
+
+async function publishCraneTelemetryPeriodically(db, device) {
+  console.log(
+    `Starting crane telemetry publisher (interval=${simulatorSettings.craneTelemetryIntervalMs}ms, topic=harboursense/telemetry/crane/{craneId}/raw)`
+  );
+
+  while (true) {
+    try {
+      const cranes = await db.collection('edgeDevices').find({ type: 'crane' }).toArray();
+      for (const crane of cranes) {
+        const payload = buildCraneTelemetryPayload(crane.id, {
+          active: isCraneActive(crane.taskPhase),
+        });
+        const validation = validateCraneTelemetryPayload(payload);
+        if (!validation.valid) {
+          console.warn(`Skipping invalid crane telemetry for ${crane.id}: missing ${validation.missing.join(', ')}`);
+          continue;
+        }
+        device.publish(craneTelemetryTopic(crane.id), JSON.stringify(payload));
+      }
+      if (cranes.length) {
+        console.log(`Published crane telemetry for ${cranes.length} crane(s)`);
+      }
+    } catch (err) {
+      console.error('Crane telemetry publish error:', err);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, simulatorSettings.craneTelemetryIntervalMs));
   }
 }
 
 
 async function runPortSimulation() {
-  const client = new MongoClient(uri);
   await client.connect();
-  const db = client.db('port');
+  console.log(`Connected to MongoDB database '${mongoSettings.databaseName}' from MONGO_URI`);
+  const db = client.db(mongoSettings.databaseName);
 
   // FIXED: Ensure edgeDevices exist with idle defaults (as provided)
   const edgesCount = await db.collection('edgeDevices').countDocuments();
@@ -656,12 +705,15 @@ async function runPortSimulation() {
     warehouses.push('C5');
   }
   console.log(`Loaded graph: ${docks.length} docks (${docks.join(', ')}), ${warehouses.length} warehouses (${warehouses.join(', ')})`);
+  console.log(
+    `Simulator timing: shipmentIntervalsMs=${simulatorSettings.shipmentIntervalMsList.join(',')}, craneTelemetryIntervalMs=${simulatorSettings.craneTelemetryIntervalMs}, simLoopTickMs=${simulatorSettings.simLoopTickMs}`
+  );
 
   // Pass to generator
   generateShipmentsPeriodically(db, docks, warehouses);
 
   device.on('connect', async () => {
-    console.log('Connected to AWS IoT Core');
+    console.log(`Connected to ${mqttBrokerLabel}`);
     const topics = [
       'harboursense/edge/+/task',
       'harboursense/traffic/update/+',
@@ -682,9 +734,11 @@ async function runPortSimulation() {
     } else {
       console.log('No edges found after insert check.');
     }
+
+    publishCraneTelemetryPeriodically(db, device);
   });
 
-  device.on('error', (err) => console.error('AWS IoT error:', err));
+  device.on('error', (err) => console.error('MQTT error:', err));
 
   device.on('message', async (topic, payload) => {
     try {
@@ -734,10 +788,11 @@ async function runPortSimulation() {
           }
         }
 
-        // FIXED: Merge taskData into edge (override Nulls) (as provided)
-        const mergedTask = { ... (edge.task || {}), ...taskData };  // e.g., fix startNode='A1' if Null
-        if (edge.startNode === 'Null' || edge.startNode === null) edge.startNode = taskData.startNode || 'A1';
-        if (edge.shipmentId === 'Null' || edge.shipmentId === null) edge.shipmentId = taskData.shipmentId;
+        // Merge taskData into any existing task object while normalizing legacy null strings.
+        const existingTask = (typeof edge.task === 'object' && edge.task !== null) ? edge.task : {};
+        const mergedTask = { ...existingTask, ...taskData };
+        if (isNullSentinel(edge.startNode)) edge.startNode = taskData.startNode || 'A1';
+        if (isNullSentinel(edge.shipmentId)) edge.shipmentId = taskData.shipmentId || null;
 
         // FIXED: Update DB with merged state (en-route_start) (as provided)
         const updates = {
@@ -747,7 +802,7 @@ async function runPortSimulation() {
           path: taskData.path || [],
           finalNode: taskData.finalNode,
           startNode: edge.startNode,
-          nextNode: taskData.path?.[1] || taskData.destNode,
+          nextNode: taskData.path?.[1] || taskData.destNode || null,
           currentLocation: edge.currentLocation,
           assignedShipment: taskData.shipmentId,  // Sync legacy field if used
           updatedAt: new Date()
@@ -837,9 +892,7 @@ async function generateShipmentsPeriodically(db, docks, warehouses) {
 
     console.log(`New arrived shipment: ${newShipment.id} at ${randomDock} (dest: ${randomWarehouse}, ready for offload)`);
 
-    // NEW: Random interval from [30s, 60s, 90s]
-    const intervals = [30000, 60000, 90000];  // ms
-    const randomInterval = intervals[Math.floor(Math.random() * intervals.length)];
+    const randomInterval = pickShipmentIntervalMs(simulatorSettings.shipmentIntervalMsList);
     console.log(`Next shipment in ${randomInterval / 1000}s...`);
 
     await new Promise(resolve => setTimeout(resolve, randomInterval));

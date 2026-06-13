@@ -2,6 +2,8 @@ import React, { useEffect, useState, useMemo } from 'react';
 import ReactFlow, { Background, Controls, BaseEdge } from 'reactflow';
 import 'reactflow/dist/style.css';
 import axios from 'axios';
+import { getApiBaseUrl } from './apiConfig';
+import { StatusSidebar } from './StatusPanels';
 
 // Node & Device sizes
 const NODE_WIDTH = 150;
@@ -117,8 +119,19 @@ function App() {
   const [selectedNodeSensors, setSelectedNodeSensors] = useState([]);
   const [selectedSensor, setSelectedSensor] = useState(null);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const [graphStatus, setGraphStatus] = useState('loading');
+  const [graphError, setGraphError] = useState(null);
+  const [liveDataError, setLiveDataError] = useState(null);
+  const [shipments, setShipments] = useState([]);
+  const [sensorAlerts, setSensorAlerts] = useState([]);
+  const [maintenanceAlerts, setMaintenanceAlerts] = useState([]);
+  const [panelErrors, setPanelErrors] = useState({
+    shipments: null,
+    sensorAlerts: null,
+    maintenanceAlerts: null,
+  });
 
-  const BASE_URL = 'http://localhost:8000';
+  const BASE_URL = getApiBaseUrl();
 
   const edgeTypes = useMemo(
     () => ({
@@ -155,9 +168,18 @@ function App() {
   // Fetch graph nodes
   useEffect(() => {
     const fetchGraph = async () => {
+      setGraphStatus('loading');
+      setGraphError(null);
       try {
         const res = await axios.get(`${BASE_URL}/api/graph`);
         const rawNodes = Object.values(res.data.nodes || {});
+        if (rawNodes.length === 0) {
+          setGraphNodes([]);
+          setEdges([]);
+          setPositions({});
+          setGraphStatus('empty');
+          return;
+        }
         const pos = gridLayout(rawNodes);
         setPositions(pos);
 
@@ -214,32 +236,74 @@ function App() {
 
         setGraphNodes(gNodes);
         setEdges(graphEdges);
+        setGraphStatus('ready');
       } catch (err) {
         console.error('Error fetching graph:', err);
+        setGraphStatus('error');
+        setGraphError(err?.response?.data?.detail || err?.message || 'Unable to load port graph');
       }
     };
     fetchGraph();
-  }, []);
+  }, [BASE_URL]);
 
-  // Fetch live devices & sensors
+  // Fetch live devices, sensors, shipments, and alerts
   useEffect(() => {
     const fetchLiveData = async () => {
+      const nextPanelErrors = {
+        shipments: null,
+        sensorAlerts: null,
+        maintenanceAlerts: null,
+      };
+
       try {
         const edgesRes = await axios.get(`${BASE_URL}/api/edges`);
-        console.log('Fetched edge data:', edgesRes.data); // Log raw fetched data
         setLiveEdges(edgesRes.data);
 
         const sensorsRes = await axios.get(`${BASE_URL}/api/sensors`);
         const uniqueSensors = Array.from(new Map(sensorsRes.data.map((s) => [s.id, s])).values());
         setSensors(uniqueSensors);
+        setLiveDataError(null);
       } catch (error) {
         console.error('Error fetching live data:', error);
+        setLiveDataError(error?.response?.data?.detail || error?.message || 'Unable to refresh live device data');
       }
+
+      try {
+        const shipmentsRes = await axios.get(`${BASE_URL}/api/shipments`);
+        setShipments(Array.isArray(shipmentsRes.data) ? shipmentsRes.data : []);
+      } catch (error) {
+        nextPanelErrors.shipments = error?.response?.data?.detail?.message
+          || error?.message
+          || 'Unable to load shipments';
+      }
+
+      try {
+        const sensorAlertsRes = await axios.get(`${BASE_URL}/api/alerts/sensor`);
+        setSensorAlerts(Array.isArray(sensorAlertsRes.data) ? sensorAlertsRes.data : []);
+      } catch (error) {
+        nextPanelErrors.sensorAlerts = error?.response?.data?.detail?.message
+          || error?.message
+          || 'Unable to load sensor alerts';
+      }
+
+      try {
+        const maintenanceAlertsRes = await axios.get(`${BASE_URL}/api/alerts/maintenance`);
+        setMaintenanceAlerts(Array.isArray(maintenanceAlertsRes.data) ? maintenanceAlertsRes.data : []);
+      } catch (error) {
+        nextPanelErrors.maintenanceAlerts = error?.response?.data?.detail?.message
+          || error?.message
+          || 'Unable to load maintenance alerts';
+      }
+
+      setPanelErrors(nextPanelErrors);
     };
-    fetchLiveData();
-    const interval = setInterval(fetchLiveData, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    if (graphStatus === 'ready') {
+      fetchLiveData();
+      const interval = setInterval(fetchLiveData, 3000);
+      return () => clearInterval(interval);
+    }
+    return undefined;
+  }, [BASE_URL, graphStatus]);
 
   // Log updates whenever liveEdges change (optional: show every 20% progress in console)
   useEffect(() => {
@@ -276,6 +340,26 @@ function App() {
   return (
     <div style={{ height: '100vh' }}>
       <h2>HarbourSense Smart Port</h2>
+      {graphStatus === 'loading' && (
+        <p role="status">Loading port graph…</p>
+      )}
+      {graphStatus === 'error' && (
+        <p role="alert">Graph unavailable: {graphError}</p>
+      )}
+      {graphStatus === 'empty' && (
+        <p role="status">Port graph is empty. Seed MongoDB graph data before using the dashboard.</p>
+      )}
+      {liveDataError && graphStatus === 'ready' && (
+        <p role="alert">Live data warning: {liveDataError}</p>
+      )}
+      {graphStatus === 'ready' && (
+        <StatusSidebar
+          shipments={shipments}
+          sensorAlerts={sensorAlerts}
+          maintenanceAlerts={maintenanceAlerts}
+          panelErrors={panelErrors}
+        />
+      )}
       <ReactFlow
         nodes={[...graphNodes, ...mapDevicesToNodes(liveEdges, positions)]}
         edges={edges}

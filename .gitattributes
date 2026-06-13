@@ -1,0 +1,2 @@
+python-backend/entrypoint.sh text eol=lf
+port-sim/entrypoint.sh text eol=lf

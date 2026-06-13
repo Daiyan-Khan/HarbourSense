@@ -1,4 +1,5 @@
-paho-mqtt
-numpy
-scikit-learn
-joblib
+paho-mqtt>=2.0.0
+numpy>=1.26.0
+scikit-learn>=1.5.2,<1.7
+joblib>=1.4.0
+pymongo>=4.8.0

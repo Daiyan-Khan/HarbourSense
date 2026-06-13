@@ -139,5 +139,22 @@
     "eta": 0,
     "taskCompletionTime": 0,
     "journeyTime": 0
+  },
+  {
+    "id": "forklift_001",
+    "type": "forklift",
+    "roles": ["loading"],
+    "currentLocation": "D2",
+    "task": "idle",
+    "nextNode": null,
+    "finalNode": null,
+    "startNode": null,
+    "path": [],
+    "taskPhase": "idle",
+    "eta": 0,
+    "taskCompletionTime": 0,
+    "journeyTime": 0,
+    "speed": 8,
+    "capacity": 30
   }
 ]

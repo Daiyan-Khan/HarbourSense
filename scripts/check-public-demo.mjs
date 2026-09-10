@@ -5,6 +5,7 @@ const address = new URL(process.env.DEMO_PUBLIC_URL || 'https://daiyan-khan.gith
 if (address.protocol !== 'https:') throw new Error('The published demo must use HTTPS.');
 const expectedRevision = process.env.GITHUB_SHA || process.env.DEMO_EXPECTED_REVISION;
 let lastError;
+let verified = false;
 for (let attempt = 0; attempt < 12; attempt += 1) {
   try {
     const response = await fetch(new URL(`demo-build.json?verify=${Date.now()}`, address), { signal: AbortSignal.timeout(10000) });
@@ -14,8 +15,9 @@ for (let attempt = 0; attempt < 12; attempt += 1) {
     if (expectedRevision && build.sourceRevision !== expectedRevision) throw new Error('Pages is still serving a different source revision.');
     if (`${build.basePath}/` !== address.pathname) throw new Error('Published subpath does not match build metadata.');
     console.log(`PUBLIC BUILD PASS: ${address.href} revision ${build.sourceRevision}`);
-    process.exit(0);
+    verified = true;
+    break;
   } catch (error) { lastError = error; }
   if (attempt < 11) await delay(5000);
 }
-throw lastError;
+if (!verified) throw lastError;

@@ -4,9 +4,9 @@
 
 The portfolio edition has two modes: a complete local engineering demonstration and a static recorded simulation for a free public site. The public build replays observations captured from the local pipeline; it does not run a remote Python backend or anomaly model.
 
-[Local demo guide](docs/LOCAL_DEMO.md) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Release verification](docs/verification.md)
+[Interactive demo](https://daiyan-khan.github.io/HarbourSense/) · [88-second walkthrough](https://daiyan-khan.github.io/HarbourSense/media/harboursense-walkthrough.webm) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Release verification](docs/verification.md)
 
-**Publication status:** screenshots, an [88-second walkthrough](docs/media/harboursense-walkthrough.webm), real scenario recordings and local recovery checks are complete. GitHub CI and public deployment are the remaining release gates. A personal portfolio website will be built later.
+**Published on GitHub Pages:** all three scenarios work through recorded simulation in each visitor's browser, independently of the development laptop. [The deployment and public browser checks passed](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486542398). The complete backend remains available through the local quick start below. A personal portfolio website will be built later.
 
 ![HarbourSense recorded shipment journey and full port overview](docs/media/harboursense-overview.png)
 
@@ -89,7 +89,7 @@ Open [the static preview](http://127.0.0.1:4173/HarbourSense/). The build defaul
 
 GitHub Pages hosts the compiled dashboard and synthetic recordings. Each visitor controls their own browser playback; MongoDB, MQTT and Python remain part of the reproducible local system. GitHub Pages is available for public repositories on GitHub Free, using the included hosting address. No paid backend is required for this design. [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
-Publishing and testing the public HTTPS URL are separate release steps. See [the public-demo preparation guide](docs/LOCAL_DEMO.md#record-and-preview-the-static-demo) and [the implementation plan](PORTFOLIO_PLAN.md). Actual full-server hosting remains an optional later decision, outside the static demo's requirements.
+The repository uses the **Publish portfolio demo** Actions workflow. Its build checks recording/media hashes and browser behavior, deploys to Pages, then checks the public revision and browser journeys from another Linux runner. See [the public-demo guide](docs/LOCAL_DEMO.md#free-publication-and-a-future-personal-site) and [the implementation plan](PORTFOLIO_PLAN.md). Actual full-server hosting remains an optional later decision.
 
 ## Verification and attribution
 

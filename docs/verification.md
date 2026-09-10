@@ -26,9 +26,11 @@ Exact wall-clock scheduling can vary between real service runs. These figures de
 
 ## Public release gate
 
-[GitHub CI passed all six jobs](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34485721207) on source revision `5f9ea78`: backend, simulator/tooling, analyzer/evaluation, real MQTT broker contracts, dashboard/replay browser checks, and fresh-stack startup/integration/live browser checks. This was a clean Ubuntu runner, independently rebuilding and running the complete stack.
+[Final main CI passed all six jobs](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486464953) on release revision `58aefe24`: backend, simulator/tooling, analyzer/evaluation, real MQTT broker contracts, dashboard/replay browser checks, and fresh-stack startup/integration/live browser checks. This was a clean Ubuntu runner, independently rebuilding and running the complete stack. The earlier [implementation CI](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34485721207) also passed.
 
-Deployed HTTPS verification is pending. The Pages workflow includes a separate Linux job that checks deployed revision metadata and exercises the public URL, all scenarios, visitor isolation and mobile keyboard controls without access to this laptop's backend.
+[First Pages publication and public verification passed](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486542398) for revision `58aefe240a7a04545d45aeae8ce3679e03db3e00`. A separate Ubuntu runner checked the deployed revision, all three public scenario journeys, visitor isolation and mobile keyboard controls against [the actual HTTPS site](https://daiyan-khan.github.io/HarbourSense/), without access to this laptop's backend. The hosted walkthrough returned HTTP 200 with the expected video type and 7,110,945-byte length.
+
+Fresh unauthenticated Chromium sessions also visually verified the public site at 1440×1000, 1280×800 and 390×844. All 25 map locations rendered and fit; each session made five same-origin GET requests and no API/external requests, with no browser or HTTP errors. [Public visual evidence](verification/public-visual-qa.json) preserves the check details.
 
 An independent cloud runner can demonstrate that playback needs only the published assets. A physical second-device test with the development laptop powered off has not been performed here and must not be reported as completed.
 

@@ -135,11 +135,11 @@ After recording, stop the full stack and keep only the static preview running. T
 
 The first public release targets GitHub Pages with the compiled replay build. GitHub Pages hosts static HTML/CSS/JavaScript and is available for public repositories on GitHub Free. The included `github.io` address avoids a new domain purchase. Python, MongoDB, MQTT and persistent workers do not execute on Pages. [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
-The release must configure its chosen repository for a GitHub Actions Pages workflow and publish only the approved static build. Repository configuration, workflow success and an actual public URL must be verified; a local build does not publish the site. [Custom Pages workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+The public release is available at [daiyan-khan.github.io/HarbourSense](https://daiyan-khan.github.io/HarbourSense/). The repository is configured for the **Publish portfolio demo** GitHub Actions workflow, which uploads only the validated compiled frontend, synthetic recordings and verified media. Run that workflow against `main` to publish a later tested release; building locally alone does not publish. [Custom Pages workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 
 There is no personal website yet. Complete and publish HarbourSense first; later, add its interactive-demo, repository and case-study links to the personal site. Full-backend server hosting is optional future work, not a prerequisite for the free static release.
 
-Before declaring the public release complete, check HTTPS, the repository subpath, all three scenarios, narrow-screen/keyboard access and independent visitor resets on a separate device/network with the developer laptop off. The public URL and those external checks are pending until their evidence is recorded.
+The [public deployment verification](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486542398) passed HTTPS revision/subpath checks, all three scenarios, narrow-screen keyboard access and independent visitor resets from an independent Linux runner. Fresh unauthenticated browsers also passed desktop/laptop/mobile visual checks. A literal physical second-device check with the laptop powered off remains an optional manual confirmation; it has not been performed here.
 
 ## Verification
 
@@ -169,7 +169,7 @@ npm run test:e2e
 
 Set `DEMO_E2E_URL` when using a non-default dashboard URL. Clear the live-mode environment variables before switching back to replay tests. These browser tests are separate from API restart, broker interruption and database-unavailability experiments; do not claim those recovery cases from a happy-path browser result.
 
-The saved offline evaluation results are measured evidence, with raw inputs and source hashes. The full fresh-Docker-stack gate and a deployed HTTPS check need their own successful run logs. On the original development machine Docker Desktop was unavailable during initial recovery work; a native local run can validate processing but cannot stand in for fresh Docker startup evidence.
+The saved offline evaluation results are measured evidence, with raw inputs and source hashes. [Final main CI](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486464953) passed all six jobs, including fresh Docker startup, real broker contracts, fault-injection recovery and the live browser journey. [The verification ledger](verification.md) separates this evidence from native recording capture and public replay tests.
 
 ## Troubleshooting
 

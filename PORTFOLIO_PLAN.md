@@ -1,6 +1,6 @@
 # HarbourSense portfolio implementation plan
 
-Implementation ledger updated 10 September 2026. Checked items have linked evidence. Fresh GitHub CI has passed; public deployment remains an explicit release gate. See [release verification](docs/verification.md).
+Implementation ledger updated 11 September 2026 (Australia/Sydney). The standalone [public demo](https://daiyan-khan.github.io/HarbourSense/) is released. Fresh GitHub CI, deployment and independent public browser checks passed; checked items link to the evidence. See [release verification](docs/verification.md).
 
 **Confirmed scope update:** the personal website does not exist yet. Finish HarbourSense and its standalone free public demo first. Provide its demo URL, screenshots, and case-study material ready for the future website; building that website and adding its links are a later task, not a prerequisite for this release.
 
@@ -116,9 +116,10 @@ Primary areas: `python-backend/traffic_analyzer.py`, `port-sim/lib/crane-telemet
 - [x] Record a 60–90 second walkthrough, capture polished screenshots, and publish reproducible benchmark/evaluation artifacts with their inputs.
 - [x] Build the first public demo as a GitHub Pages deployment with recordings from the real local scenarios. Reuse the dashboard through live/replay data adapters and label the public mode as recorded simulation.
 - [x] Provide scenario selection, device inspection, pause/resume, playback speed, and reset entirely within each visitor's browser. The published demo must not require the local API or share mutable playback state between visitors.
-- [ ] Add a tested GitHub Actions build/deployment workflow, configure the Pages repository subpath, and publish only the approved frontend and synthetic scenario assets over HTTPS.
-- [ ] Prepare the standalone “Interactive demo” URL, repository link, and case-study material for the future personal site. Use the included hosting address to retain $0 recurring hosting cost. Add the buttons when that website is built in a later task.
-- [ ] Verify the published demo from another device/network with the developer laptop off. Check scenario playback, mobile/keyboard access, independent resets, and absence of localhost or external-backend requests.
+- [x] Add a tested GitHub Actions build/deployment workflow, configure the Pages repository subpath, and publish only the approved frontend and synthetic scenario assets over HTTPS.
+- [x] Prepare the standalone “Interactive demo” URL, repository link, and case-study material for the future personal site. Use the included hosting address to retain $0 recurring hosting cost. Add the buttons when that website is built in a later task.
+- [x] Verify public HTTPS playback, mobile/keyboard access, independent resets and absence of localhost/external-backend requests from an independent GitHub Linux runner. Fresh public browser sessions also passed at desktop, laptop and mobile widths.
+- [ ] Optional manual confirmation: open the published demo on a physical second device with the developer laptop powered off. This literal device/power test has not been performed; cloud-runner evidence already verifies that the public release uses no local backend.
 - [x] Keep actual full-backend hosting as an optional later task, conditional on eligible free VM capacity and an explicit decision to operate it. The public Pages demo must remain usable independently.
 
 Acceptance: an unauthenticated visitor can open the standalone demo URL, play and inspect the recorded scenarios, and reset their own session while the developer laptop is off. Hosting has $0 recurring cost under the selected free plan; no paid add-ons or expiring trial credits are required. Another engineer can reproduce the full local system and documented results. Public claims match measured evidence, and playback is clearly labeled as recorded simulation. Building the personal website and adding its demo link are deferred to a later task.
@@ -127,7 +128,7 @@ Acceptance: an unauthenticated visitor can open the standalone demo URL, play an
 
 User requirement: a public demonstration linked from the personal portfolio, available while the developer laptop is off, with $0 recurring hosting cost and very low expected visitor traffic. A paid plan or temporary trial credit does not satisfy the ongoing budget. Use an included hosting subdomain or an already-owned domain.
 
-Planned first public release: keep the code and deployment automation on GitHub and publish the React dashboard with a clearly labeled browser-based replay on GitHub Pages. Generate the replay data from the real local scenarios and reuse the existing dashboard presentation. Visitors can select a scenario, inspect devices, pause, change playback speed, and reset their own playback. The full Python/MongoDB/MQTT system remains reproducible locally and supplies the scenario recordings and engineering evidence.
+Published first public release: keep the code and deployment automation on GitHub and publish the React dashboard with a clearly labeled browser-based replay on GitHub Pages. Generate the replay data from the real local scenarios and reuse the existing dashboard presentation. Visitors can select a scenario, inspect devices, pause, change playback speed, and reset their own playback. The full Python/MongoDB/MQTT system remains reproducible locally and supplies the scenario recordings and engineering evidence.
 
 This first release provides a public interactive portfolio demonstration; the Python backend does not run on the Pages hosting server. Actual online execution of the complete backend is an optional follow-up using an eligible Oracle Always Free virtual machine if capacity is available. No optional VM account or full-backend deployment has been created.
 
@@ -204,4 +205,4 @@ For each batch, review the current diff first, preserve unrelated work, run the 
 - Public hosting budget is fixed at $0 recurring, with GitHub Pages and browser-based recorded scenarios planned for the first public release. The existing public repository is `Daiyan-Khan/HarbourSense`; the standalone demo uses its included Pages address. There is no personal website yet; no domain or personal-site integration is required for this release. Actual server-side backend hosting remains an optional later decision.
 - Contribution attribution confirmed: HarbourSense is a solo project. Credit it accordingly in the case study and future personal website.
 
-Remaining release work is Pages publication and verification of the deployed site. Fresh GitHub CI and final portfolio media have passed. Local startup, scenarios, controls, evaluations and browser journeys have passed the checks linked in the verification ledger.
+Released: free public demo, verified screenshots/video, case study, evaluations and complete reproducible local stack. [Final main CI](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486464953) and [Pages/public browser verification](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486542398) passed. The physical powered-off-device check is an optional manual confirmation; building the personal website and any full-backend public server remain deferred.

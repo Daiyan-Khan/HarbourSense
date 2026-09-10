@@ -4,13 +4,13 @@ HarbourSense models the movement of a shipment through a small port and exposes 
 
 The engineering problem is broader than drawing moving markers: several processes update different parts of the same operation. The dashboard needs a coherent account of what happened, who owns the next action, and whether the displayed data is current. The portfolio work connects that explanation to a reproducible local system and a free public recorded demonstration.
 
-[Run it locally](LOCAL_DEMO.md) · [Evaluation evidence](evaluation.md) · [Source overview](../README.md) · [Full implementation plan](../PORTFOLIO_PLAN.md)
+[Interactive demo](https://daiyan-khan.github.io/HarbourSense/) · [Watch the walkthrough](https://daiyan-khan.github.io/HarbourSense/media/harboursense-walkthrough.webm) · [Run it locally](LOCAL_DEMO.md) · [Evaluation evidence](evaluation.md) · [Source overview](../README.md)
 
 ## Demonstration and boundaries
 
 The local system uses real MQTT and MongoDB services with synthetic shipments, device states and telemetry. It is a software simulation, not a connection to a real port or a validated industrial control system.
 
-The public release is designed as static playback of snapshots/events recorded from that local pipeline. Visitors can inspect devices, choose a scenario, pause, change playback speed and reset their own session. They see recorded analyzer outputs; no hosted model is performing new inference in that mode.
+The public release provides static playback of snapshots/events recorded from that local pipeline. Visitors can inspect devices, choose a scenario, pause, change playback speed and reset their own session. They see recorded analyzer outputs; no hosted model is performing new inference in that mode.
 
 | Scenario | What it is intended to demonstrate | Required outcome |
 | --- | --- | --- |
@@ -145,7 +145,7 @@ The [87.84-second walkthrough](media/harboursense-walkthrough.webm) follows a re
 
 ![An actual recorded crane anomaly, feature trends and maintenance alert](media/harboursense-crane-detail.png)
 
-The [verification ledger](verification.md) records completed local service recovery and browser checks. GitHub CI and public HTTPS deployment are still release gates. A literal physical second-device test with the laptop powered off has not been performed. The personal portfolio site and its links are a later task.
+The [verification ledger](verification.md) links successful GitHub CI, local service recovery, Pages deployment and independent public browser checks. Published playback passed at desktop, laptop and mobile widths without backend requests. A literal physical second-device test with the laptop powered off has not been performed. The personal portfolio site and its links are a later task.
 
 ## Contribution attribution
 

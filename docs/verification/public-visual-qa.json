@@ -1,0 +1,61 @@
+{
+  "url": "https://daiyan-khan.github.io/HarbourSense/",
+  "checkedAt": "2026-09-10T14:07:14.723Z",
+  "browser": "Pinned Playwright Chromium, unauthenticated contexts, real clock",
+  "failures": [],
+  "results": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "file": "public-overview-1440.png",
+      "requests": 5,
+      "layout": {
+        "locations": 25,
+        "outside": [],
+        "horizontalOverflow": false,
+        "mapWidth": 1054,
+        "mapHeight": 620
+      },
+      "source": "Recorded simulation",
+      "progress": "41.35974826042636"
+    },
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "file": "public-overview-1280.png",
+      "requests": 5,
+      "layout": {
+        "locations": 25,
+        "outside": [],
+        "horizontalOverflow": false,
+        "mapWidth": 894,
+        "mapHeight": 563.1875
+      },
+      "source": "Recorded simulation",
+      "progress": "41.42002393326942"
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "file": "public-overview-390.png",
+      "requests": 5,
+      "layout": {
+        "locations": 25,
+        "outside": [],
+        "horizontalOverflow": false,
+        "mapWidth": 356,
+        "mapHeight": 430
+      },
+      "source": "Recorded simulation",
+      "progress": "41.862045531770306"
+    }
+  ],
+  "screenshotsRetainedLocally": true,
+  "checkedRevision": "58aefe240a7a04545d45aeae8ce3679e03db3e00"
+}

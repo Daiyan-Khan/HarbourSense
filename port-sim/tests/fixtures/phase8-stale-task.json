@@ -1,0 +1,10 @@
+{
+  "shipmentId": "shipment_1",
+  "phase": "transport",
+  "path": ["A1", "A2", "B2"],
+  "routeRevision": 1,
+  "assignmentEpoch": 100,
+  "startNode": "A1",
+  "finalNode": "B4",
+  "requiredPlace": "A1"
+}

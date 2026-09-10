@@ -32,8 +32,12 @@ test('getSimulatorSettings exposes shipment and tick defaults', () => {
   assert.deepEqual(settings.shipmentIntervalMsList, DEFAULT_SHIPMENT_INTERVALS_MS);
   assert.equal(settings.craneTelemetryIntervalMs, 5000);
   assert.equal(settings.simProgressIntervalMs, 1000);
+  assert.equal(settings.simTaskStepMs, 2000);
   assert.equal(settings.simLoopIdleDelayMs, 5000);
   assert.equal(settings.simLoopTickMs, 1000);
+  assert.equal(settings.maxArrivalsPerDock, 2);
+  assert.equal(settings.shipmentGenerationEnabled, true);
+  assert.equal(settings.simDebug, false);
 });
 
 test('getSimulatorSettings reads env overrides', () => {
@@ -41,8 +45,16 @@ test('getSimulatorSettings reads env overrides', () => {
     SHIPMENT_INTERVALS_MS: '120000',
     CRANE_TELEMETRY_INTERVAL_MS: '8000',
     SIM_LOOP_TICK_MS: '500',
+    SIM_TASK_STEP_MS: '1500',
+    SIM_DEBUG: 'true',
+    MAX_ARRIVALS_PER_DOCK: '3',
+    SHIPMENT_GENERATION_ENABLED: 'false',
   });
   assert.deepEqual(settings.shipmentIntervalMsList, [120000]);
   assert.equal(settings.craneTelemetryIntervalMs, 8000);
   assert.equal(settings.simLoopTickMs, 500);
+  assert.equal(settings.simTaskStepMs, 1500);
+  assert.equal(settings.simDebug, true);
+  assert.equal(settings.maxArrivalsPerDock, 3);
+  assert.equal(settings.shipmentGenerationEnabled, false);
 });

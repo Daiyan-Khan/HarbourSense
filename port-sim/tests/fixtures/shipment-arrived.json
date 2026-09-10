@@ -5,5 +5,7 @@
   "destination": "D2",
   "status": "arrived",
   "createdAt": "2026-06-12T09:55:00.000Z",
+  "scheduledNextAt": "2026-06-12T10:55:00.000Z",
+  "queuePosition": null,
   "updatedAt": "2026-06-12T09:55:00.000Z"
 }

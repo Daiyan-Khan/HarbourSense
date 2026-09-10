@@ -1,11 +1,14 @@
-# The 'version' tag is obsolete and has been removed.
+# Runtime configuration is loaded from .env in this directory (copy .env.example to .env).
+# Do not hardcode defaults here; set values in .env instead.
 
 services:
   mongo:
+    profiles:
+      - local-mongo
     image: mongo:8
     container_name: harboursense-mongo-1
     ports:
-      - "${MONGO_HOST_PORT:-27017}:27017"
+      - "${MONGO_HOST_PORT}:27017"
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -19,8 +22,8 @@ services:
     image: eclipse-mosquitto
     container_name: harboursense-mqtt-1
     ports:
-      - "${MQTT_BROKER_PORT:-1883}:1883"
-      - "${MQTT_WEBSOCKET_PORT:-9001}:9001"
+      - "${MQTT_BROKER_PORT}:1883"
+      - "${MQTT_WEBSOCKET_PORT}:9001"
     volumes:
       - ./mosquitto/conf:/mosquitto/config
       - mosquitto_data:/mosquitto/data
@@ -30,21 +33,17 @@ services:
     container_name: harboursense-mongo-seed-1
     profiles:
       - seed
+    env_file: .env
     depends_on:
       mongo:
         condition: service_healthy
+        required: false
     command: node initialise/seed-mongo.js
-    environment:
-      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/port}
-      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
-      SEED_RESET_WORKFLOW: ${SEED_RESET_WORKFLOW:-true}
-      MONGO_TTL_SENSOR_DATA_DAYS: ${MONGO_TTL_SENSOR_DATA_DAYS:-7}
-      MONGO_TTL_TRAFFIC_DATA_DAYS: ${MONGO_TTL_TRAFFIC_DATA_DAYS:-14}
-      MONGO_TTL_EDGE_HISTORY_DAYS: ${MONGO_TTL_EDGE_HISTORY_DAYS:-30}
 
   backend:
     build: ./python-backend
     container_name: harboursense-backend-1
+    env_file: .env
     ports:
       - "8000:8000"
     volumes:
@@ -53,71 +52,56 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+        required: false
       mqtt:
         condition: service_started
-    environment:
-      # Supply real secrets through .env; do not commit live credentials.
-      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/port}
-      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
-      MONGO_SERVER_SELECTION_TIMEOUT_MS: ${MONGO_SERVER_SELECTION_TIMEOUT_MS:-5000}
-      MQTT_MODE: ${MQTT_MODE:-local}
-      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
-      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
-      AWS_IOT_ENDPOINT: ${AWS_IOT_ENDPOINT:-}
-      AWS_IOT_PORT: ${AWS_IOT_PORT:-8883}
-      AWS_IOT_CA_PATH: ${AWS_IOT_CA_PATH:-}
-      AWS_IOT_CERT_PATH: ${AWS_IOT_CERT_PATH:-}
-      AWS_IOT_KEY_PATH: ${AWS_IOT_KEY_PATH:-}
 
   edge-analyzer:
     build: ./edge-analyzer
     container_name: harboursense-edge-analyzer-1
+    env_file: .env
     depends_on:
       mongo:
         condition: service_healthy
+        required: false
       mqtt:
         condition: service_started
-    environment:
-      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
-      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
-      MQTT_RECONNECT_DELAY_SECONDS: ${MQTT_RECONNECT_DELAY_SECONDS:-5}
-      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/port}
-      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
-      LOG_LEVEL: ${EDGE_ANALYZER_LOG_LEVEL:-INFO}
 
   portsim:
     build: ./port-sim
     container_name: harboursense-portsim-1
+    env_file: .env
+    environment:
+      SIM_INSTALL_DEPENDENCIES: "true"
     depends_on:
       backend:
         condition: service_started
       mongo:
         condition: service_healthy
+        required: false
       mqtt:
         condition: service_started
     volumes:
       - ./port-sim:/app
       - portsim_node_modules:/app/node_modules
     command: node port.js
+
+  sensors:
+    build: ./port-sim
+    container_name: harboursense-sensors-1
+    env_file: .env
     environment:
-      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017/port}
-      MONGO_DB_NAME: ${MONGO_DB_NAME:-port}
-      MONGO_SERVER_SELECTION_TIMEOUT_MS: ${MONGO_SERVER_SELECTION_TIMEOUT_MS:-5000}
-      MQTT_MODE: ${MQTT_MODE:-local}
-      MQTT_BROKER_HOST: ${MQTT_BROKER_HOST:-mqtt}
-      MQTT_BROKER_PORT: ${MQTT_BROKER_CONTAINER_PORT:-1883}
-      AWS_IOT_ENDPOINT: ${AWS_IOT_ENDPOINT:-}
-      AWS_IOT_PORT: ${AWS_IOT_PORT:-8883}
-      AWS_IOT_CA_PATH: ${AWS_IOT_CA_PATH:-}
-      AWS_IOT_CERT_PATH: ${AWS_IOT_CERT_PATH:-}
-      AWS_IOT_KEY_PATH: ${AWS_IOT_KEY_PATH:-}
-      SHIPMENT_INTERVALS_MS: ${SHIPMENT_INTERVALS_MS:-30000,60000,90000}
-      CRANE_TELEMETRY_INTERVAL_MS: ${CRANE_TELEMETRY_INTERVAL_MS:-5000}
-      SIM_PROGRESS_INTERVAL_MS: ${SIM_PROGRESS_INTERVAL_MS:-1000}
-      SIM_LOOP_IDLE_DELAY_MS: ${SIM_LOOP_IDLE_DELAY_MS:-5000}
-      SIM_LOOP_TICK_MS: ${SIM_LOOP_TICK_MS:-1000}
-      SIM_COMPLETING_DELAY_MS: ${SIM_COMPLETING_DELAY_MS:-2000}
-      SIM_EDGE_MISSING_DELAY_MS: ${SIM_EDGE_MISSING_DELAY_MS:-5000}
+      SIM_INSTALL_DEPENDENCIES: "true"
+    depends_on:
+      mongo:
+        condition: service_healthy
+        required: false
+      mqtt:
+        condition: service_started
+    volumes:
+      - ./port-sim:/app
+      - portsim_node_modules:/app/node_modules
+    command: node sensors.js
 
   dashboard:
     build: ./dashboard/visualizer

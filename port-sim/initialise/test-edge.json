@@ -99,7 +99,7 @@
     "id": "robot001",
     "type": "robot",
     "roles": ["repair"],
-    "currentLocation": "E5",
+    "currentLocation": "B4",
     "task": "idle",
     "nextNode": null,
     "finalNode": null,

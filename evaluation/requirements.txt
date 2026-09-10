@@ -1,0 +1,11 @@
+# Python 3.12. Shared analyzer versions; backend imports are used for routing only.
+numpy==1.26.4
+scikit-learn==1.6.1
+joblib==1.4.2
+motor==3.3.2
+pymongo==4.6.0
+aiomqtt==2.4.0
+paho-mqtt==2.1.0
+scipy==1.17.1
+threadpoolctl==3.6.0
+dnspython==2.8.0

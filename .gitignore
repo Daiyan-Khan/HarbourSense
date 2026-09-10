@@ -1,6 +1,7 @@
 # Python virtual environments
 venv/
 .venv/
+.demo-venv/
 env/
 *.pyc
 __pycache__/
@@ -30,8 +31,13 @@ certs/
 *.pfx
 
 # Local model/runtime artifacts
+.local-runtime/
 *.pkl
 *.joblib
 *.sqlite
 *.db
 mosquitto/data/
+playwright-report/
+test-results/
+artifacts/local/
+.pytest_cache/

@@ -190,6 +190,7 @@ function getMqttBrokerLabel(env = process.env) {
 }
 
 const DEFAULT_SHIPMENT_INTERVALS_MS = [30000, 60000, 90000];
+const MAX_SHIPMENT_INTERVAL_MS = 86_400_000;
 
 function parsePositiveInt(value, fallback, name) {
   if (value === undefined || value === null || String(value).trim() === '') {
@@ -216,7 +217,7 @@ function parseShipmentIntervalsMs(value, fallback = DEFAULT_SHIPMENT_INTERVALS_M
       if (!Number.isFinite(parsed) || parsed <= 0) {
         throw new Error(`SHIPMENT_INTERVALS_MS entry at position ${index + 1} must be a positive integer.`);
       }
-      return parsed;
+      return Math.min(parsed, MAX_SHIPMENT_INTERVAL_MS);
     });
 
   if (!intervals.length) {
@@ -233,15 +234,60 @@ function pickShipmentIntervalMs(intervals) {
   return intervals[Math.floor(Math.random() * intervals.length)];
 }
 
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  throw new Error(`Expected boolean env value, got '${value}'`);
+}
+
+function parsePositiveFloat(value, fallback, name) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(String(value).trim());
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive number.`);
+  }
+  return parsed;
+}
+
 function getSimulatorSettings(env = process.env) {
   return {
     shipmentIntervalMsList: parseShipmentIntervalsMs(env.SHIPMENT_INTERVALS_MS),
     craneTelemetryIntervalMs: parsePositiveInt(env.CRANE_TELEMETRY_INTERVAL_MS, 5000, 'CRANE_TELEMETRY_INTERVAL_MS'),
     simProgressIntervalMs: parsePositiveInt(env.SIM_PROGRESS_INTERVAL_MS, 1000, 'SIM_PROGRESS_INTERVAL_MS'),
+    simTaskStepMs: parsePositiveInt(env.SIM_TASK_STEP_MS, 2000, 'SIM_TASK_STEP_MS'),
     simLoopIdleDelayMs: parsePositiveInt(env.SIM_LOOP_IDLE_DELAY_MS, 5000, 'SIM_LOOP_IDLE_DELAY_MS'),
     simLoopTickMs: parsePositiveInt(env.SIM_LOOP_TICK_MS, 1000, 'SIM_LOOP_TICK_MS'),
+    simTransportRecoveryMaxTicks: parsePositiveInt(env.SIM_TRANSPORT_RECOVERY_MAX_TICKS, 10, 'SIM_TRANSPORT_RECOVERY_MAX_TICKS'),
     simCompletingDelayMs: parsePositiveInt(env.SIM_COMPLETING_DELAY_MS, 2000, 'SIM_COMPLETING_DELAY_MS'),
     simEdgeMissingDelayMs: parsePositiveInt(env.SIM_EDGE_MISSING_DELAY_MS, 5000, 'SIM_EDGE_MISSING_DELAY_MS'),
+    simSpeedMultiplier: parsePositiveFloat(env.SIM_SPEED_MULTIPLIER, 1, 'SIM_SPEED_MULTIPLIER'),
+    simNodeDistanceScale: parsePositiveInt(env.SIM_NODE_DISTANCE_SCALE, 100, 'SIM_NODE_DISTANCE_SCALE'),
+    maxArrivalsPerDock: parsePositiveInt(env.MAX_ARRIVALS_PER_DOCK, 2, 'MAX_ARRIVALS_PER_DOCK'),
+    shipmentGenerationEnabled: parseBoolean(env.SHIPMENT_GENERATION_ENABLED, true),
+    simDebug: parseBoolean(env.SIM_DEBUG, false),
+    simLogToFile: parseBoolean(env.SIM_LOG_TO_FILE, false),
+  };
+}
+
+function getSensorSettings(env = process.env) {
+  return {
+    intervalMinMs: parsePositiveInt(env.SENSOR_INTERVAL_MIN_MS, 5000, 'SENSOR_INTERVAL_MIN_MS'),
+    intervalMaxMs: parsePositiveInt(env.SENSOR_INTERVAL_MAX_MS, 60000, 'SENSOR_INTERVAL_MAX_MS'),
+    spikeProbability: (() => {
+      const raw = env.SENSOR_SPIKE_PROBABILITY;
+      if (raw === undefined || raw === null || String(raw).trim() === '') return 0.1;
+      const parsed = Number.parseFloat(String(raw).trim());
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+        throw new Error('SENSOR_SPIKE_PROBABILITY must be between 0 and 1.');
+      }
+      return parsed;
+    })(),
   };
 }
 
@@ -252,6 +298,7 @@ module.exports = {
   getMongoSettings,
   getMqttBrokerLabel,
   getSimulatorSettings,
+  getSensorSettings,
   parseShipmentIntervalsMs,
   pickShipmentIntervalMs,
 };

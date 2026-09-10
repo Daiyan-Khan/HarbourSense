@@ -3,8 +3,10 @@ set -e
 
 cd /app
 
-# The source bind mount + named node_modules volume can hide image-built deps or
-# keep a stale volume after package.json/lockfile changes. Sync on every start.
-npm ci
+# The legacy development Compose mounts source and a dependency volume.
+# The supported demo uses image dependencies without reinstalling on startup.
+if [ "${SIM_INSTALL_DEPENDENCIES:-false}" = "true" ]; then
+  npm ci --no-audit --no-fund
+fi
 
 exec "$@"

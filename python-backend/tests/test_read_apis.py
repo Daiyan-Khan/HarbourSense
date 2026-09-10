@@ -19,6 +19,9 @@ def install_main_dependency_stubs():
             self.detail = detail
 
     class FastAPI:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def add_middleware(self, *args, **kwargs):
             return None
 
@@ -28,6 +31,10 @@ def install_main_dependency_stubs():
 
             return decorator
 
+    FastAPI.post = FastAPI.get
+    response_module = types.ModuleType('fastapi.responses')
+    response_module.StreamingResponse = lambda *args, **kwargs: None
+    sys.modules.setdefault('fastapi.responses', response_module)
     fastapi_module.FastAPI = FastAPI
     fastapi_module.HTTPException = HTTPException
     middleware_module = types.ModuleType("fastapi.middleware")
@@ -100,6 +107,9 @@ class AsyncListCursor:
     def limit(self, *args, **kwargs):
         return self
 
+    async def to_list(self, length=None):
+        return list(self.docs)
+
     def __aiter__(self):
         return self
 
@@ -110,20 +120,34 @@ class AsyncListCursor:
         self.index += 1
         return doc
 
+    async def to_list(self, length=None):
+        return list(self.docs)
+
 
 class FakeCollection:
     def __init__(self, docs):
         self.docs = docs
 
+    async def count_documents(self, query=None):
+        return len(self.docs)
+
     def find(self, query=None):
-        if query and query.get("resolved") is False:
-            filtered = [doc for doc in self.docs if not doc.get("resolved")]
-            return AsyncListCursor(filtered)
-        return AsyncListCursor(self.docs)
+        query = query or {}
+        filtered = list(self.docs)
+        status_filter = query.get("status")
+        if isinstance(status_filter, dict) and "$ne" in status_filter:
+            filtered = [doc for doc in filtered if doc.get("status") != status_filter["$ne"]]
+        if query.get("resolved") is False:
+            filtered = [doc for doc in filtered if not doc.get("resolved")]
+        return AsyncListCursor(filtered)
 
 
 class ReadApiDb:
     def __init__(self):
+        from edge_view import split_edge_document
+
+        edge_doc = {"id": "crane1", "type": "crane", "taskPhase": "idle", "currentLocation": "A1"}
+        assignment, runtime = split_edge_document(edge_doc)
         self.shipments = FakeCollection([
             {
                 "id": "shipment_1",
@@ -132,6 +156,9 @@ class ReadApiDb:
                 "updatedAt": "2026-06-12T10:00:00Z",
             }
         ])
+        self.edgeRuntime = FakeCollection([runtime])
+        self.edgeAssignments = FakeCollection([assignment])
+        self.edgeDevices = FakeCollection([edge_doc])
         self.sensorAlerts = FakeCollection([
             {
                 "id": "alert_1",
@@ -150,6 +177,12 @@ class ReadApiDb:
                 "timestamp": "2026-06-12T10:06:00Z",
             }
         ])
+        self.graph = FakeCollection([
+            {"id": "A1", "type": "dock", "capacity": 8, "currentOccupancy": 0},
+        ])
+
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 
 class ReadApiTests(unittest.IsolatedAsyncioTestCase):
@@ -186,6 +219,19 @@ class ReadApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(response), 1)
         self.assertEqual(response[0]["assetId"], "crane001")
+
+    async def test_get_port_state_returns_diagnostic_snapshot(self):
+        original_db = main.db
+        main.db = ReadApiDb()
+        try:
+            response = await main.get_port_state()
+        finally:
+            main.db = original_db
+
+        self.assertIn("shipment_diagnostics", response)
+        self.assertIn("idle_edge_diagnostics", response)
+        self.assertIn("pending_counts", response)
+        self.assertEqual(response["active_shipments"], 1)
 
 
 if __name__ == "__main__":

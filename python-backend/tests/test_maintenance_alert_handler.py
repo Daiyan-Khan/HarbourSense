@@ -79,7 +79,16 @@ install_dependency_stubs()
 manager = importlib.import_module("manager")
 
 
+class FakeDatabase(types.SimpleNamespace):
+    def __getitem__(self, key):
+        return getattr(self, key, FakeCollection([]))
+
 class FakeCursor:
+    def __aiter__(self):
+        async def items():
+            for item in self.docs:
+                yield item
+        return items()
     def __init__(self, docs):
         self.docs = docs
 
@@ -88,6 +97,9 @@ class FakeCursor:
 
 
 class FakeCollection:
+    async def count_documents(self, query=None):
+        return len(self.docs)
+
     def __init__(self, docs):
         self.docs = []
         for doc in docs:
@@ -114,6 +126,11 @@ class FakeCollection:
     def find(self, query=None):
         query = query or {}
         return FakeCursor([doc for doc in self.docs if self._matches(doc, query)])
+
+    async def update_many(self, query, update):
+        for doc in self.docs:
+            if self._matches(doc, query):
+                doc.update(update.get('$set', {}))
 
     async def update_one(self, query, update, upsert=False):
         for doc in self.docs:
@@ -169,7 +186,7 @@ class MaintenanceAlertHandlerTests(unittest.IsolatedAsyncioTestCase):
         }
 
     def make_db(self, edge_docs=None, alert_docs=None):
-        return types.SimpleNamespace(
+        return FakeDatabase(
             edgeDevices=FakeCollection(edge_docs or [
                 {"id": "crane001", "type": "crane", "taskPhase": "idle", "currentLocation": "A1"},
                 {"id": "robot001", "type": "robot", "taskPhase": "idle", "currentLocation": "E5"},

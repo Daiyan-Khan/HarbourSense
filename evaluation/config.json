@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "anomaly": {
+    "trainingSeed": 42,
+    "evaluationSeeds": [110, 211, 312, 413, 514],
+    "sequenceSeconds": 180,
+    "sampleIntervalSeconds": 1,
+    "faultOnsetSeconds": 60,
+    "faultRampSeconds": 30,
+    "overheatTemperatureIncrease": 25,
+    "overheatEnergyIncrease": 20,
+    "vibrationIncrease": 1.2,
+    "vibrationEnergyIncrease": 15,
+    "thresholds": {"motorTemp": [80, 90], "vibration": [0.1, 0.6], "energyUse": [100, 120]}
+  },
+  "routing": {
+    "seeds": [110, 211, 312, 413, 514],
+    "shipments": 60,
+    "fleetSize": 4,
+    "fleetStart": "E1",
+    "origins": ["A1", "E1"],
+    "destinations": ["B4", "D2", "E5"],
+    "arrivalGapSeconds": [2, 6],
+    "horizonSeconds": 600,
+    "hopSeconds": 4,
+    "handlingSeconds": 2,
+    "bottleneck": {
+      "startSeconds": 20,
+      "endSeconds": 200,
+      "additionalHopSeconds": 16,
+      "edges": [["A2", "A3"], ["B3", "B4"], ["D1", "D2"]]
+    }
+  }
+}

@@ -20,7 +20,7 @@ class SensorAnalyzer:
     async def get_recent_data(self, sensor_type: str = 'all', window_mins: int = 30, node: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Fetch recent sensor readings for analysis (batched for ML).
-        Filters by type/node if specified.
+        Filters by type/node if specified. Skips non-numeric readings.
         """
         query = {}
         if sensor_type != 'all':
@@ -30,14 +30,28 @@ class SensorAnalyzer:
         start_time = datetime.now() - timedelta(minutes=window_mins)
         query['timestamp'] = {'$gt': start_time}
 
-        cursor = self.sensor_data_col.find(query).sort('timestamp', -1).limit(100)  # Cap for efficiency
+        cursor = self.sensor_data_col.find(query).sort('timestamp', -1).limit(100)
         data = []
         docs = []
         async for doc in cursor:
-            reading = float(doc.get('reading', 0))
-            data.append([reading])
+            numeric = self._coerce_numeric_reading(doc.get('reading'), doc.get('type'))
+            if numeric is None:
+                continue
+            data.append([numeric])
             docs.append(doc)
         return docs, data if data else []
+
+    @staticmethod
+    def _coerce_numeric_reading(reading: Any, reading_type: Optional[str] = None) -> Optional[float]:
+        """Return float reading or None for non-numeric types (e.g. motion strings)."""
+        if reading_type == 'motion':
+            if reading in (0, 1, '0', '1'):
+                return float(reading)
+            return None
+        try:
+            return float(reading)
+        except (TypeError, ValueError):
+            return None
 
     async def detect_anomaly(self, incoming_reading: Dict[str, Any], sensor_type: str = 'all', window_mins: int = 30) -> Optional[Dict[str, Any]]:
         """
@@ -47,9 +61,13 @@ class SensorAnalyzer:
         """
         node = incoming_reading.get('node', 'unknown')
         sensor_id = incoming_reading.get('id', 'unknown')
-        reading = float(incoming_reading.get('reading', 0))
         reading_type = incoming_reading.get('type', sensor_type)
         timestamp = incoming_reading.get('timestamp', datetime.now())
+
+        reading = self._coerce_numeric_reading(incoming_reading.get('reading'), reading_type)
+        if reading is None:
+            logger.debug(f"Skipping non-numeric reading for {sensor_id} ({reading_type})")
+            return None
 
         # Rule-based quick checks (real-time, for env/spikes)
         alert_type = None
@@ -57,11 +75,11 @@ class SensorAnalyzer:
         suggestion = 'monitor'
 
         if reading_type == 'vibration':
-            if reading > 5:  # Threshold from your sensor.js
+            if reading > 8:
                 alert_type = 'vibration_spike'
-                severity = 'high' if reading > 10 else 'medium'
-                suggestion = 'repair'  # Core: trigger maintenance
-            elif reading > 3:
+                severity = 'high' if reading > 12 else 'medium'
+                suggestion = 'repair'
+            elif reading > 5:
                 alert_type = 'vibration_elevated'
                 severity = 'low'
                 suggestion = 'monitor'

@@ -1,0 +1,370 @@
+{
+  "schemaVersion": 1,
+  "experiment": "Offline classifier evaluation on held-out labeled synthetic sequences",
+  "config": {
+    "trainingSeed": 42,
+    "evaluationSeeds": [
+      110,
+      211,
+      312,
+      413,
+      514
+    ],
+    "sequenceSeconds": 180,
+    "sampleIntervalSeconds": 1,
+    "faultOnsetSeconds": 60,
+    "faultRampSeconds": 30,
+    "overheatTemperatureIncrease": 25,
+    "overheatEnergyIncrease": 20,
+    "vibrationIncrease": 1.2,
+    "vibrationEnergyIncrease": 15,
+    "thresholds": {
+      "motorTemp": [
+        80,
+        90
+      ],
+      "vibration": [
+        0.1,
+        0.6
+      ],
+      "energyUse": [
+        100,
+        120
+      ]
+    }
+  },
+  "model": {
+    "model": "IsolationForest",
+    "syntheticTraining": true,
+    "trainingSeed": 42,
+    "trainingSamples": 10000,
+    "featureOrder": [
+      "motorTemp",
+      "vibration",
+      "energyUse"
+    ],
+    "trainingScript": "create_model.py",
+    "contamination": 0.01,
+    "normalRanges": {
+      "motorTemp": [
+        80,
+        90
+      ],
+      "vibration": [
+        0.1,
+        0.6
+      ],
+      "energyUse": [
+        100,
+        120
+      ]
+    }
+  },
+  "classBalance": {
+    "samples": 2700,
+    "healthy": 1500,
+    "faulty": 1200,
+    "sequences": 15
+  },
+  "isolationForest": {
+    "truePositive": 535,
+    "falsePositive": 29,
+    "falseNegative": 665,
+    "trueNegative": 1471,
+    "precision": 0.9485815602836879,
+    "recall": 0.44583333333333336,
+    "falseAlarmRate": 0.019333333333333334,
+    "episodes": [
+      {
+        "sequenceId": "110-overheat",
+        "delaySeconds": 9
+      },
+      {
+        "sequenceId": "110-vibration",
+        "delaySeconds": 24
+      },
+      {
+        "sequenceId": "211-overheat",
+        "delaySeconds": 13
+      },
+      {
+        "sequenceId": "211-vibration",
+        "delaySeconds": 11
+      },
+      {
+        "sequenceId": "312-overheat",
+        "delaySeconds": 12
+      },
+      {
+        "sequenceId": "312-vibration",
+        "delaySeconds": 22
+      },
+      {
+        "sequenceId": "413-overheat",
+        "delaySeconds": 10
+      },
+      {
+        "sequenceId": "413-vibration",
+        "delaySeconds": 14
+      },
+      {
+        "sequenceId": "514-overheat",
+        "delaySeconds": 19
+      },
+      {
+        "sequenceId": "514-vibration",
+        "delaySeconds": 33
+      }
+    ],
+    "missedEpisodes": 0,
+    "medianDetectionDelaySecondsAmongDetected": 13.5,
+    "p95DetectionDelaySecondsAmongDetected": 28.94999999999999,
+    "bySequenceKind": {
+      "healthy": {
+        "truePositive": 0,
+        "falsePositive": 21,
+        "falseNegative": 0,
+        "trueNegative": 879,
+        "precision": 0.0,
+        "recall": null,
+        "falseAlarmRate": 0.023333333333333334
+      },
+      "overheat": {
+        "truePositive": 349,
+        "falsePositive": 4,
+        "falseNegative": 251,
+        "trueNegative": 296,
+        "precision": 0.9886685552407932,
+        "recall": 0.5816666666666667,
+        "falseAlarmRate": 0.013333333333333334
+      },
+      "vibration": {
+        "truePositive": 186,
+        "falsePositive": 4,
+        "falseNegative": 414,
+        "trueNegative": 296,
+        "precision": 0.9789473684210527,
+        "recall": 0.31,
+        "falseAlarmRate": 0.013333333333333334
+      }
+    },
+    "bySeed": {
+      "110": {
+        "truePositive": 103,
+        "falsePositive": 7,
+        "falseNegative": 137,
+        "trueNegative": 293,
+        "precision": 0.9363636363636364,
+        "recall": 0.42916666666666664,
+        "falseAlarmRate": 0.023333333333333334
+      },
+      "211": {
+        "truePositive": 122,
+        "falsePositive": 4,
+        "falseNegative": 118,
+        "trueNegative": 296,
+        "precision": 0.9682539682539683,
+        "recall": 0.5083333333333333,
+        "falseAlarmRate": 0.013333333333333334
+      },
+      "312": {
+        "truePositive": 109,
+        "falsePositive": 11,
+        "falseNegative": 131,
+        "trueNegative": 289,
+        "precision": 0.9083333333333333,
+        "recall": 0.45416666666666666,
+        "falseAlarmRate": 0.03666666666666667
+      },
+      "413": {
+        "truePositive": 101,
+        "falsePositive": 3,
+        "falseNegative": 139,
+        "trueNegative": 297,
+        "precision": 0.9711538461538461,
+        "recall": 0.42083333333333334,
+        "falseAlarmRate": 0.01
+      },
+      "514": {
+        "truePositive": 100,
+        "falsePositive": 4,
+        "falseNegative": 140,
+        "trueNegative": 296,
+        "precision": 0.9615384615384616,
+        "recall": 0.4166666666666667,
+        "falseAlarmRate": 0.013333333333333334
+      }
+    }
+  },
+  "threshold": {
+    "truePositive": 1111,
+    "falsePositive": 0,
+    "falseNegative": 89,
+    "trueNegative": 1500,
+    "precision": 1.0,
+    "recall": 0.9258333333333333,
+    "falseAlarmRate": 0.0,
+    "episodes": [
+      {
+        "sequenceId": "110-overheat",
+        "delaySeconds": 8
+      },
+      {
+        "sequenceId": "110-vibration",
+        "delaySeconds": 10
+      },
+      {
+        "sequenceId": "211-overheat",
+        "delaySeconds": 8
+      },
+      {
+        "sequenceId": "211-vibration",
+        "delaySeconds": 7
+      },
+      {
+        "sequenceId": "312-overheat",
+        "delaySeconds": 8
+      },
+      {
+        "sequenceId": "312-vibration",
+        "delaySeconds": 8
+      },
+      {
+        "sequenceId": "413-overheat",
+        "delaySeconds": 7
+      },
+      {
+        "sequenceId": "413-vibration",
+        "delaySeconds": 7
+      },
+      {
+        "sequenceId": "514-overheat",
+        "delaySeconds": 7
+      },
+      {
+        "sequenceId": "514-vibration",
+        "delaySeconds": 7
+      }
+    ],
+    "missedEpisodes": 0,
+    "medianDetectionDelaySecondsAmongDetected": 7.5,
+    "p95DetectionDelaySecondsAmongDetected": 9.099999999999998,
+    "bySequenceKind": {
+      "healthy": {
+        "truePositive": 0,
+        "falsePositive": 0,
+        "falseNegative": 0,
+        "trueNegative": 900,
+        "precision": null,
+        "recall": null,
+        "falseAlarmRate": 0.0
+      },
+      "overheat": {
+        "truePositive": 558,
+        "falsePositive": 0,
+        "falseNegative": 42,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.93,
+        "falseAlarmRate": 0.0
+      },
+      "vibration": {
+        "truePositive": 553,
+        "falsePositive": 0,
+        "falseNegative": 47,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.9216666666666666,
+        "falseAlarmRate": 0.0
+      }
+    },
+    "bySeed": {
+      "110": {
+        "truePositive": 221,
+        "falsePositive": 0,
+        "falseNegative": 19,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.9208333333333333,
+        "falseAlarmRate": 0.0
+      },
+      "211": {
+        "truePositive": 223,
+        "falsePositive": 0,
+        "falseNegative": 17,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.9291666666666667,
+        "falseAlarmRate": 0.0
+      },
+      "312": {
+        "truePositive": 222,
+        "falsePositive": 0,
+        "falseNegative": 18,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.925,
+        "falseAlarmRate": 0.0
+      },
+      "413": {
+        "truePositive": 223,
+        "falsePositive": 0,
+        "falseNegative": 17,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.9291666666666667,
+        "falseAlarmRate": 0.0
+      },
+      "514": {
+        "truePositive": 222,
+        "falsePositive": 0,
+        "falseNegative": 18,
+        "trueNegative": 300,
+        "precision": 1.0,
+        "recall": 0.925,
+        "falseAlarmRate": 0.0
+      }
+    }
+  },
+  "inputsSha256": "250b6b5330cf1a1a27efb9b0b3058ec65a1c1307cbffcf70c9a9205d2862ec22",
+  "predictionsSha256": "86eb29118bf50bac9ddc18ffd679859b27c638daf13174cb31f4bd2e7c8825d6",
+  "provenance": {
+    "generatedAt": "2026-09-10T13:19:05.254921+00:00",
+    "startedAt": "2026-09-10T13:19:04.801278+00:00",
+    "wallClockExecutionSeconds": 0.2812,
+    "hardware": {
+      "os": "Windows-11-10.0.26200-SP0",
+      "architecture": "AMD64",
+      "processor": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+      "logicalCpuCount": 16
+    },
+    "python": "3.12.7",
+    "packages": {
+      "numpy": "1.26.4",
+      "scikit-learn": "1.6.1",
+      "joblib": "1.4.2",
+      "scipy": "1.17.1",
+      "threadpoolctl": "3.6.0",
+      "motor": "3.3.2",
+      "pymongo": "4.6.0",
+      "aiomqtt": "2.4.0",
+      "paho-mqtt": "2.1.0",
+      "dnspython": "2.8.0"
+    },
+    "sourceHashNormalization": "CRLF converted to LF; evidence artifact hashes use raw bytes",
+    "sourceSha256": {
+      "edge-analyzer/model_utils.py": "436b90dae91cf6bc3cdfe01fcb7aead00bb533d1294a02fc3d9f40d1c8718c54",
+      "evaluation/anomaly.py": "6fb4457374378823044adc9f1ec2bd0670637e265ce49bce68cd42a3620d726b",
+      "evaluation/common.py": "a9ce76478a9db285a4f1c33cfec7131690fcbb1e225a939f6f4ccc5c7e263291",
+      "evaluation/config.json": "9ffeb55efaa141d645409f9cbf37732836801d3b604c2f0cb3353a11c32a8917"
+    }
+  },
+  "limitations": [
+    "Synthetic labels mean a fault was injected, including the gradual ramp before values leave normal ranges.",
+    "Thresholds were fixed from training ranges before evaluation; no thresholds or model parameters were tuned on held-out seeds.",
+    "Healthy samples mirror simulator idle/active marginal ranges; correlated real sensors, drift, noise, sensor failure and real fault prevalence are not represented.",
+    "Detection delay is simulated seconds after injection, not advance failure prediction or network delivery latency.",
+    "Repeated observations in a sequence are dependent. Seed summaries show variation, not independent-sample confidence intervals.",
+    "This offline experiment does not test MQTT, MongoDB, maintenance dispatch, repairs, or browser presentation."
+  ]
+}

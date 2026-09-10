@@ -11,9 +11,15 @@ import logging
 import json
 from backend_config import MongoConfigError, create_mongo_client, get_mongo_settings
 from mqtt_config import MqttConfigError, build_aiomqtt_params, get_mqtt_settings
-from task_assigner import TaskAssigner
-from traffic_analyzer import TrafficAnalyzer, SmartRoutePlanner
+from port_state import build_port_state_snapshot
+from edge_view import load_merged_edge, load_merged_edges
+from task_assigner import TaskAssigner, max_status, normalize_shipment_current_node
+from traffic_analyzer import TrafficAnalyzer, SmartRoutePlanner, validate_path_adjacency
+from route_helpers import edge_is_in_transit, queue_or_publish_route
+from edge_command_queue import enqueue_edge_work
 import aiomqtt
+from demo_runtime import (CURRENT, DemoMqttClient, DemoRunEnded, demo_enabled,
+                          validate_demo_settings, run_worker, accept_demo_event, mark_demo_event)
 
 # ----------------------- Logging Setup -----------------------
 logger = logging.getLogger("HarbourSenseManager")
@@ -80,46 +86,103 @@ def needs_reroute(current_node, remaining_path, analyzer):
     return False
 
 # ----------------------- Traffic Update Handler -----------------------
-async def handle_traffic_update(db, mqtt_client, edge_id, analyzer, task_assigner):
+async def handle_traffic_update(db, mqtt_client, edge_id, analyzer, task_assigner, payload=None):
+    """Process simulator arrival events — metrics only; completion via edge/completion topic."""
     try:
-        edge = await db.edgeDevices.find_one({'id': edge_id})
-        logger.debug(f"Full edge doc for {edge_id}: {json.dumps(edge, default=str, indent=2) if edge else 'None'}")
+        if payload and payload.get('status') == 'arrived':
+            await analyzer.analyze_metrics(triggered_by=f"Arrival event from {edge_id}")
+            logger.debug(
+                "Traffic arrival edge=%s loc=%s remaining=%s rev=%s",
+                edge_id,
+                payload.get('currentLocation'),
+                payload.get('remainingPath', []),
+                payload.get('routeRevision'),
+            )
+    except Exception as e:
+        logger.error(f"Error in handle_traffic_update for {edge_id}: {e}")
+
+
+async def maybe_reroute_edge(db, mqtt_client, edge_id, analyzer):
+    """Gated reroute: only at hop boundary; publishes to edge route command topic."""
+    try:
+        edge = await load_merged_edge(db, edge_id)
         if not edge or not edge.get('path'):
-            logger.debug(f"No path found for edge {edge_id}, skipping reroute check")
+            return
+
+        task_phase = edge.get('taskPhase', '')
+        if task_phase in ('idle', 'completing'):
+            return
+
+        if edge_is_in_transit(edge):
+            logger.debug(f"Skipping reroute for {edge_id}: in transit progress={edge.get('progressToNext')}")
+            return
+
+        dest = normalize_node(edge.get('finalNode'), 'B4')
+        current = normalize_node(edge.get('currentLocation'), '')
+        if current == dest and len(edge.get('path', [])) <= 1:
+            return
+
+        if task_phase not in ('en_route_start', 'assigned', 'relocating'):
             return
 
         path = edge.get('path', [])
-        dest = normalize_node(edge.get('finalNode'), 'B4')  # FIXED: Use finalNode (consistent)
-        logger.debug(f"Edge {edge_id} path: {path} (type: {type(path)}), dest: {dest}")
-        
-        await analyzer.analyze_metrics(triggered_by=f"Reroute check for {edge_id}")
-        remaining_path = path[1:] if len(path) > 1 else []
-        
-        if needs_reroute(edge['currentLocation'], remaining_path, analyzer):
-            start = edge['currentLocation']
-            node_loads = analyzer.get_current_loads()
-            route_congestion = analyzer.get_route_congestion()
-            predicted_loads = analyzer.get_predicted_loads()
-            logger.debug(f"Computing new path for {edge_id}. Start: {start}, Dest: {dest}, node_loads sample: {dict(list(node_loads.items())[:3])}, congestion sample: {dict(list(route_congestion.items())[:3])}, predicted sample: {dict(list(predicted_loads.items())[:3])}")
+        remaining_path = [node for node in path if node != current]
 
-            new_path = SmartRoutePlanner.compute_path(
+        if not needs_reroute(edge['currentLocation'], remaining_path, analyzer):
+            return
+
+        await analyzer.analyze_metrics(triggered_by=f"Reroute check for {edge_id}")
+        start = edge['currentLocation']
+        node_loads = analyzer.get_current_loads()
+        route_congestion = analyzer.get_route_congestion()
+        predicted_loads = analyzer.get_predicted_loads()
+
+        task = edge.get('task') if isinstance(edge.get('task'), dict) else {}
+        phase = task.get('phase')
+        pickup = normalize_node(
+            task.get('pickupNode') or task.get('requiredPlace') or task.get('startNode'),
+            '',
+        )
+        current_norm = normalize_node(start, '')
+
+        if phase in ('transport', 'delivery') and pickup and pickup != dest and not edge.get('pickupCompleted'):
+            if current_norm != pickup:
+                to_pickup = analyzer.planner.compute_path(
+                    start, pickup, node_loads, route_congestion, predicted_loads=predicted_loads
+                )
+                to_pickup = validate_path_adjacency(to_pickup, analyzer.planner)
+                to_dest = analyzer.planner.compute_path(
+                    pickup, dest, node_loads, route_congestion, predicted_loads=predicted_loads
+                )
+                to_dest = validate_path_adjacency(to_dest, analyzer.planner)
+                if not to_pickup or not to_dest:
+                    logger.warning(f"Failed pickup-aware reroute for {edge_id}")
+                    return
+                new_path = list(to_pickup)
+                if to_dest:
+                    if new_path and new_path[-1] == to_dest[0]:
+                        new_path.extend(to_dest[1:])
+                    else:
+                        new_path.extend(to_dest)
+            else:
+                new_path = analyzer.planner.compute_path(
+                    pickup, dest, node_loads, route_congestion, predicted_loads=predicted_loads
+                )
+        else:
+            new_path = analyzer.planner.compute_path(
                 start, dest, node_loads, route_congestion, predicted_loads=predicted_loads
             )
-            if new_path:
-                update_msg = {'path': new_path, 'finalNode': dest}
-                await mqtt_client.publish(f"harboursense/traffic/update/{edge_id}", json.dumps(update_msg))  # FIXED: Specific topic
-                logger.info(f"Pushed reroute for {edge_id} due to detected load. New path: {new_path}")
-            else:
-                logger.warning(f"Failed to compute reroute for {edge_id} (invalid nodes? check logs above)")
-        else:
-            logger.debug(f"No reroute needed for {edge_id}")
+        new_path = validate_path_adjacency(new_path, analyzer.planner)
+        if not new_path:
+            logger.warning(f"Failed to compute valid adjacent reroute for {edge_id}")
+            return
 
-        # FIXED: Check for arrival completion (if at finalNode, trigger handle_completion)
-        if edge.get('taskPhase') == 'completing' and edge.get('currentLocation') == dest:
-            await handle_completion(db, task_assigner, edge_id, edge.get('task', {}), mqtt_client)
-            logger.info(f"Detected arrival completion for {edge_id} at {dest}; handled via update")
+        edge_speed = edge.get('speed', 10)
+        eta = (len(new_path) - 1) / edge_speed if len(new_path) > 1 else 0
+        await queue_or_publish_route(db, mqtt_client, edge_id, new_path, analyzer, eta=eta)
+        logger.info(f"Reroute command for {edge_id}: {new_path} (ETA: {eta}s)")
     except Exception as e:
-        logger.error(f"Error in handle_traffic_update for {edge_id}: {e}")
+        logger.error(f"Error in maybe_reroute_edge for {edge_id}: {e}")
 
 # ----------------------- Completion Handler (Unified for MQTT/Arrival) -----------------------
 # NEW: Separate handler for completions (calls TaskAssigner's method)
@@ -164,12 +227,6 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
             current_node = normalize_node(current_node_raw, 'A1')
             dest = normalize_node(dest_raw, 'C5')
             logger.debug(f"Payload extracted - status: {status}, current: {current_node}, dest: {dest}")
-            if current_node != current_node_raw:
-                logger.warning(f"Missing currentNode in payload for {shipment_id}; fixing to 'A1'")
-                payload['currentNode'] = 'A1'
-            if dest != dest_raw:
-                logger.warning(f"Missing destination in payload for {shipment_id}; fixing to 'C5'")
-                payload['destination'] = 'C5'
 
 
             # Parse createdAt (existing)
@@ -189,6 +246,19 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                 payload['assignedEdges'] = assigned_edges  # Override with DB value
                 logger.debug(f"Preserved assignedEdges for {shipment_id}: {assigned_edges} (len: {len(assigned_edges)})")
 
+            current_status = current_shipment.get('status', 'arrived') if current_shipment else 'arrived'
+            status = max_status(current_status, status)
+            current_node = normalize_shipment_current_node(
+                current_node,
+                current_shipment,
+                task_assigner.graph if task_assigner else None,
+            )
+            if current_node != current_node_raw:
+                logger.warning(f"Normalized currentNode for {shipment_id}: {current_node_raw} -> {current_node}")
+            if dest != dest_raw:
+                logger.warning(f"Missing destination in payload for {shipment_id}; fixing to 'C5'")
+                payload['destination'] = 'C5'
+
 
             # Initial DB update (existing, now with merged assignedEdges)
             update_data = {
@@ -200,6 +270,19 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
                 'createdAt': created_at_parsed,
                 'updatedAt': datetime.now()
             }
+            if payload.get('scheduledNextAt'):
+                update_data['scheduledNextAt'] = payload.get('scheduledNextAt')
+            if payload.get('queuePosition') is not None:
+                update_data['queuePosition'] = payload.get('queuePosition')
+            if payload.get('scheduledNextAt'):
+                try:
+                    update_data['scheduledNextAt'] = datetime.fromisoformat(
+                        str(payload['scheduledNextAt']).replace('Z', '+00:00')
+                    )
+                except ValueError:
+                    update_data['scheduledNextAt'] = payload['scheduledNextAt']
+            if payload.get('queuePosition') is not None:
+                update_data['queuePosition'] = payload['queuePosition']
             logger.debug(f"Updating DB for {shipment_id} with: {json.dumps(update_data, default=str, indent=2)}")
 
 
@@ -208,7 +291,7 @@ async def handle_shipment_update(db, task_assigner, analyzer, message):
 
 
             if status in ['arrived', 'offloaded'] and task_assigner.graph:
-                warehouse = await task_assigner._select_warehouse(current_node, shipment_id) or task_assigner._nearest_warehouse(current_node)
+                warehouse = dest if CURRENT.get() and task_assigner.graph.get(dest, {}).get('type') == 'warehouse' else await task_assigner._select_warehouse(current_node, shipment_id) or task_assigner._nearest_warehouse(current_node)
                 await db.shipments.update_one(
                     {'id': shipment_id},
                     {'$set': {'destination': warehouse, 'warehouseAssigned': warehouse, 'updatedAt': datetime.now()}},
@@ -237,7 +320,7 @@ async def _handle_relocation_if_needed(db, task_assigner, analyzer, assigned_dev
             return
         
         # Fetch device
-        device_doc = await db.edgeDevices.find_one({'id': assigned_device})
+        device_doc = await load_merged_edge(db, assigned_device)
         if not device_doc:
             logger.warning(f"Device {assigned_device} not found; skip reloc")
             return
@@ -252,39 +335,30 @@ async def _handle_relocation_if_needed(db, task_assigner, analyzer, assigned_dev
         # Compute path (use analyzer or empty fallbacks)
         node_loads = analyzer.get_current_loads() if analyzer else {}
         route_congestion = analyzer.get_route_congestion() if analyzer else {}
-        reloc_path = SmartRoutePlanner.compute_path(
+        reloc_path = analyzer.planner.compute_path(
             current_loc, start_node, node_loads, route_congestion
         )
+        reloc_path = validate_path_adjacency(reloc_path, analyzer.planner)
         if not reloc_path or len(reloc_path) < 2:
-            logger.warning(f"Invalid reloc path {current_loc}→{start_node}; proceed with teleport")
-            # Optional: Still set currentLocation to start_node
-            await db.edgeDevices.update_one({'id': assigned_device}, {'$set': {'currentLocation': start_node}})
+            logger.warning(f"Invalid reloc path {current_loc}→{start_node}; skipping teleport")
             return
-        
-        # Update edge to relocating (temp field for sim)
-        await db.edgeDevices.update_one(
-            {'id': assigned_device},
-            {'$set': {
-                'taskPhase': 'relocating',
-                'relocPath': reloc_path,
-                'updatedAt': datetime.now()
-            }}
+
+        async def _reloc():
+            if task_assigner.mqtt_client:
+                await queue_or_publish_route(
+                    db,
+                    task_assigner.mqtt_client,
+                    assigned_device,
+                    reloc_path,
+                    analyzer,
+                )
+            return True
+
+        await enqueue_edge_work(assigned_device, _reloc)
+        logger.info(
+            f"Relocation route queued for {assigned_device} ({phase}): "
+            f"{reloc_path[:3]}... to {start_node}"
         )
-        
-        # Publish for sim (port.js executes, then completes)
-        reloc_payload = {
-            'deviceId': assigned_device,
-            'relocPath': reloc_path,
-            'target': start_node,
-            'shipmentId': shipment_id,
-            'phase': phase
-        }
-        if task_assigner.mqtt_client:
-            await task_assigner.mqtt_client.publish(
-                f"harboursense/edge/relocate/{assigned_device}",
-                json.dumps(reloc_payload)
-            )
-        logger.info(f"Relocation published for {assigned_device} ({phase}): {reloc_path[:3]}... to {start_node}")
         
     except Exception as e:
         logger.error(f"Reloc error for {assigned_device} ({phase}): {e}")
@@ -312,7 +386,7 @@ async def resolve_maintenance_node(db, alert_payload):
     if asset_id in NULL_NODE_SENTINELS:
         return None
 
-    asset_doc = await db.edgeDevices.find_one({"id": asset_id})
+    asset_doc = await load_merged_edge(db, asset_id)
     if asset_doc:
         location = asset_doc.get("currentLocation")
         if location not in NULL_NODE_SENTINELS:
@@ -326,7 +400,8 @@ async def maintenance_assignment_active(db, target_node):
     if target_node in NULL_NODE_SENTINELS:
         return False
 
-    edges = await db.edgeDevices.find({"taskPhase": {"$ne": "idle"}}).to_list(None)
+    edges = await load_merged_edges(db)
+    edges = [e for e in edges if e.get('taskPhase') != 'idle']
     for edge in edges:
         task = edge.get("task")
         if not isinstance(task, dict) or task.get("phase") != "maintenance":
@@ -349,14 +424,14 @@ async def maintenance_alert_already_handled(db, asset_id):
     return existing is not None
 
 
-async def mark_maintenance_alert_assigned(db, asset_id):
+async def mark_maintenance_alert_assigned(db, asset_id, node=None):
     """Record that backend maintenance assignment was triggered for this asset."""
     if asset_id in NULL_NODE_SENTINELS:
         return
 
-    await db.maintenanceAlerts.update_one(
+    await db.maintenanceAlerts.update_many(
         {"assetId": asset_id, "resolved": False},
-        {"$set": {"assignmentTriggered": True, "assignmentTriggeredAt": datetime.now()}},
+        {"$set": {"assignmentTriggered": True, "assignedNode": node, "assignmentTriggeredAt": datetime.utcnow()}},
     )
 
 
@@ -382,10 +457,12 @@ async def handle_maintenance_alert(db, mqtt_client, task_assigner, raw_payload):
             return
 
         if await maintenance_alert_already_handled(db, asset_id):
+            await mark_maintenance_alert_assigned(db, asset_id, target_node)
             logger.info("Maintenance alert for %s already triggered assignment; skipping duplicate", asset_id)
             return
 
         if await maintenance_assignment_active(db, target_node):
+            await mark_maintenance_alert_assigned(db, asset_id, target_node)
             logger.info(
                 "Maintenance assignment already active for node %s (asset %s); skipping duplicate",
                 target_node,
@@ -393,8 +470,10 @@ async def handle_maintenance_alert(db, mqtt_client, task_assigner, raw_payload):
             )
             return
 
-        await task_assigner.assign_maintenance_task(target_node, db, mqtt_client)
-        await mark_maintenance_alert_assigned(db, asset_id)
+        assigned = await task_assigner.assign_maintenance_task(target_node, db, mqtt_client)
+        if assigned is False:
+            return
+        await mark_maintenance_alert_assigned(db, asset_id, target_node)
         logger.info("Maintenance task assigned for asset %s at node %s", asset_id, target_node)
     except json.JSONDecodeError as e:
         logger.error("Invalid JSON in maintenance alert: %s", e)
@@ -428,6 +507,10 @@ async def handle_sensor_data(db, mqtt_client, analyzer, task_assigner, sensor_an
                 
             logger.info(f"Sensor Analyzer Handled - Anomaly for {anomaly['node']}: {anomaly['alert_type']} -> {anomaly['suggestion']}")
         else:
+            if incoming_reading.get('type') == 'occupancy' and float(incoming_reading.get('reading', 0)) <= 70:
+                await db.sensorAlerts.update_many(
+                    {'id': incoming_reading.get('id'), 'alert_type': 'occupancy_high', 'resolved': False},
+                    {'$set': {'resolved': True, 'resolvedAt': datetime.utcnow()}})
             logger.debug(f"Sensor Analyzer Outcome - No anomaly: {incoming_reading.get('id')} at {incoming_reading.get('node')} (reading: {incoming_reading.get('reading')} of type {incoming_reading.get('type')})")
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON in sensor data: {e}, raw: {payload_str}")
@@ -437,6 +520,9 @@ async def handle_sensor_data(db, mqtt_client, analyzer, task_assigner, sensor_an
 # ----------------------- MQTT Handler (Unified with Reconnection) -----------------------
 async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer):
     """Robust MQTT handler: Recreates client on reconnect for AWS IoT stability."""
+    context = CURRENT.get()
+    if context:
+        mqtt_params = {**mqtt_params, "identifier": f"harboursense-demo-manager-{context.run_id}", "clean_session": False, "keepalive": 10}
     max_retries = 10
     retry_delay = 5  # Seconds
 
@@ -444,7 +530,9 @@ async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer
         mqtt_client = None
         try:
             # Create client each iteration (context manager handles connect)
-            async with aiomqtt.Client(**mqtt_params) as mqtt_client:
+            async with aiomqtt.Client(**mqtt_params) as raw_client:
+                demo_context = CURRENT.get()
+                mqtt_client = DemoMqttClient(raw_client, demo_context) if demo_context else raw_client
                 logger.info("MQTT Client connected and ready")
                 task_assigner.mqtt_client = mqtt_client
                 analyzer.mqtt_client = mqtt_client
@@ -461,11 +549,17 @@ async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer
                 await mqtt_client.subscribe("harboursense/alerts/maintenance")  # Edge-analyzer maintenance alerts
                 logger.info("Subscribed to maintenance alerts")
 
+                if demo_context:
+                    await demo_context.heartbeat('ready', mqttConnected=True)
+                retry_delay = 1
                 logger.info("Starting MQTT message loop")
                 async for message in mqtt_client.messages:
                     topic = str(message.topic)
                     try:
                         raw_payload = message.payload
+                        demo_payload = json.loads(raw_payload) if demo_context else {}
+                        if demo_context and not await accept_demo_event(demo_payload):
+                            continue
                         logger.debug(f"=== MQTT MESSAGE RECEIVED === Topic: {topic}, Raw Payload len: {len(raw_payload) if raw_payload else 0}")
                         
                         # Route to handlers (add try-except per handler to isolate errors)
@@ -492,7 +586,9 @@ async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer
                             except json.JSONDecodeError as e:
                                 logger.error(f"JSON error in edge update {topic}: {e}")
                                 continue
-                            await handle_traffic_update(db, mqtt_client, edge_id, analyzer, task_assigner)  # Pass task_assigner for completions
+                            await handle_traffic_update(db, mqtt_client, edge_id, analyzer, task_assigner, data)
+                            if data.get('status') == 'arrived':
+                                await maybe_reroute_edge(db, mqtt_client, edge_id, analyzer)
                         else:
                             try:
                                 data = json.loads(raw_payload.decode('utf-8'))
@@ -501,11 +597,22 @@ async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer
                             except Exception as e:
                                 logger.error(f"Error processing unhandled topic {topic}: {e}")
                         
+                        if demo_context:
+                            await mark_demo_event(demo_payload)
+                    except DemoRunEnded:
+                        raise
                     except Exception as e:  # Catch any per-message error
                         logger.error(f"Error processing message on {topic}: {e}")
                         continue  # Don't break loop on single message fail
 
+        except DemoRunEnded:
+            raise
         except aiomqtt.MqttError as e:
+            if CURRENT.get():
+                await CURRENT.get().heartbeat('starting', mqttConnected=False)
+                await asyncio.sleep(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 5)
+                continue
             if "Disconnected" in str(e) or "Connection lost" in str(e):
                 logger.warning(f"MQTT disconnected: {e}. Retrying in {retry_delay}s...")
                 await asyncio.sleep(retry_delay)
@@ -520,7 +627,7 @@ async def mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer
             continue
 
 # ----------------------- Setup -----------------------
-async def setup():
+async def setup(db_override=None):
     try:
         mongo_settings = get_mongo_settings()
         client = create_mongo_client(mongo_settings)
@@ -528,7 +635,8 @@ async def setup():
         logger.error(f"Invalid MongoDB configuration for manager startup: {exc}")
         raise
 
-    db = client[mongo_settings.database_name]
+    db = db_override if db_override is not None else client[mongo_settings.database_name]
+    owned_tasks = []
     logger.info(f"Configured MongoDB database '{mongo_settings.database_name}' from MONGO_URI")
 
     sensor_analyzer = SensorAnalyzer(db)
@@ -573,7 +681,8 @@ async def setup():
                 logger.debug(f"Added occupancy=0 for warehouse {node_id}")
 
         analyzer = TrafficAnalyzer(db, None, graph)  # No mqtt_client needed here; handler provides
-        asyncio.create_task(analyzer.start_mqtt_listener())
+        if CURRENT.get() is None:
+            owned_tasks.append(asyncio.create_task(analyzer.start_mqtt_listener()))
         logger.info("TrafficAnalyzer listener started")
         
         # FIXED: Pass graph to TaskAssigner (requires __init__ update: def __init__(..., graph=None))
@@ -593,16 +702,17 @@ async def setup():
         # Log initial data
         initial_shipments = await db.shipments.find().to_list(None)
         logger.debug(f"Initial shipments count: {len(initial_shipments)}; sample dests: {[s.get('destination') for s in initial_shipments[:3]]}")
-        initial_edges = await db.edgeDevices.find().to_list(None)
+        initial_edges = await load_merged_edges(db)
         logger.debug(f"Initial edges count: {len(initial_edges)}; sample finalNodes: {[e.get('finalNode') for e in initial_edges[:3] if e]}")
         
-        await analyzer.analyze_metrics("startup")
+        if CURRENT.get() is None:
+            await analyzer.analyze_metrics("startup")
         logger.info("Initial traffic analysis complete")
 
         # Start tasks (pass mqtt_params to handler)
-        asyncio.create_task(task_assigner.monitor_and_assign())
-        asyncio.create_task(mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer))
-        asyncio.create_task(overview_reporter(db, logger))  # Start periodic overview
+        owned_tasks.append(asyncio.create_task(task_assigner.monitor_and_assign()))
+        owned_tasks.append(asyncio.create_task(mqtt_handler(db, mqtt_params, analyzer, task_assigner, sensor_analyzer)))
+        owned_tasks.append(asyncio.create_task(overview_reporter(db, logger)))  # Start periodic overview
 
         logger.info("Setup complete. Manager running.")
         await asyncio.Event().wait()
@@ -613,64 +723,38 @@ async def setup():
         logger.error(f"Setup error (e.g., graph/DB): {e}")
         raise
 
+    finally:
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+
 async def overview_reporter(db, logger):
     """Periodic global overview of shipments and edges."""
     while True:
         try:
-            # Shipments overview
-            shipments = await db.shipments.find({}).to_list(length=100)
-            status_counts = {}
-            pending_offload = []
-            pending_transport = []
-            pending_store = []
-            for s in shipments:
-                status = s.get('status', 'unknown')
-                status_counts[status] = status_counts.get(status, 0) + 1
-                if status == 'arrived':
-                    pending_offload.append(s['id'])
-                elif status == 'offloaded':
-                    pending_transport.append(s['id'])
-                elif status == 'transporting':
-                    pending_store.append(s['id'])
-            
-            # Edges overview
-            edges = await db.edgeDevices.find({}).to_list(length=50)
-            state_counts = {'idle': 0, 'en_route_start': 0, 'assigned': 0, 'completing': 0}
-            type_counts = {}
-            busy_edges = []
-            for e in edges:
-                state = e.get('taskPhase', 'idle')
-                state_counts[state] = state_counts.get(state, 0) + 1
-                edge_type = e.get('type', 'unknown')
-                type_counts[edge_type] = type_counts.get(edge_type, 0) + 1
-                if state != 'idle':
-                    busy_edges.append(f"{e['id']} ({edge_type}) at {e['currentLocation']}")
-            
-            # Alerts overview (new for sensor)
-            alerts = await db.sensorAlerts.find({'resolved': False}).to_list(None)
-            alert_counts = {'high': 0, 'medium': 0, 'low': 0}
-            for a in alerts:
-                sev = a.get('severity', 'low')
-                alert_counts[sev] += 1
-            
+            snapshot = await build_port_state_snapshot(db)
+            pending = snapshot['pending_ids']
             overview = f"""
 === GLOBAL OVERVIEW @ {time.strftime('%Y-%m-%d %H:%M:%S')} ===
-SHIPMENTS (Total: {len(shipments)}):
-- By Status: {status_counts}
-- Pending Offload: {len(pending_offload)} ({pending_offload[:3] if pending_offload else 'None'})
-- Pending Transport: {len(pending_transport)} ({pending_transport[:3] if pending_transport else 'None'})
-- Pending Store: {len(pending_store)} ({pending_store[:3] if pending_store else 'None'})
+SHIPMENTS (Total: {snapshot['total_shipments']}, Active: {snapshot['active_shipments']}):
+- By Status: {snapshot['status_counts']}
+- Pending Arrived (offload): {snapshot['pending_counts']['pending_arrived']} ({pending['pending_arrived'][:3] or 'None'})
+- Pending Offloaded (transport): {snapshot['pending_counts']['pending_offloaded']} ({pending['pending_offloaded'][:3] or 'None'})
+- Pending Transported (store_move): {snapshot['pending_counts']['pending_transported']} ({pending['pending_transported'][:3] or 'None'})
+- Pending Storing (store_load): {snapshot['pending_counts']['pending_storing']} ({pending['pending_storing'][:3] or 'None'})
+- Pending Stored (delivery): {snapshot['pending_counts']['pending_stored']} ({pending['pending_stored'][:3] or 'None'})
+- Queue Flags: {snapshot['queue_counts']}
 
-EDGES (Total: {len(edges)}):
-- By State: {state_counts}
-- By Type: {type_counts}
-- Busy Edges: {len(busy_edges)} ({busy_edges[:5] if busy_edges else 'None'})
+EDGES:
+- By State: {snapshot['edge_state_counts']}
+- By Type: {snapshot['edge_type_counts']}
+- Idle By Type: {snapshot['idle_by_type']}
+- Busy Edges: {len(snapshot['busy_edges'])} ({snapshot['busy_edges'][:5] or 'None'})
 
-SENSOR ALERTS (Unresolved: {len(alerts)}):
-- By Severity: {alert_counts}
-- Sample: {len([a for a in alerts[:3]])} ({[f"{a['node']}: {a['alert_type']}" for a in alerts[:3]] if alerts else 'None'})
+SENSOR ALERTS (Unresolved: {snapshot['unresolved_alerts']}):
+- By Severity: {snapshot['alert_counts']}
 
-Warehouses Load: {await get_warehouse_loads(db)}  # Assume helper func below
+Warehouses Load: {await get_warehouse_loads(db)}
 """
             logger.info(overview)
         except Exception as e:
@@ -683,5 +767,21 @@ async def get_warehouse_loads(db):
     warehouses = await db.graph.find({'type': 'warehouse'}).to_list(None)
     return {w['id']: f"{w.get('currentOccupancy', 0)}/{w.get('capacity', 0)}" for w in warehouses}
 
+async def main():
+    if demo_enabled():
+        settings = get_mongo_settings()
+        validate_demo_settings(settings)
+        client = create_mongo_client(settings)
+        base = client[settings.database_name]
+        try:
+            await run_worker("manager", base, lambda context: setup(context.db))
+        finally:
+            client.close()
+    else:
+        await setup()
+
 if __name__ == "__main__":
-    asyncio.run(setup())
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main())

@@ -1,0 +1,40 @@
+{
+  "startedAt": "2026-09-10T13:48:40.423Z",
+  "checks": [
+    {
+      "name": "duplicate start is acknowledged without creating another run"
+    },
+    {
+      "name": "pause freezes shared clock and device progress"
+    },
+    {
+      "name": "shipment reaches storage and final delivery through actual workers",
+      "runId": "07779cd2283b47d89db2267189ae39df",
+      "observed": [
+        "arrived",
+        "offloaded",
+        "storing",
+        "stored",
+        "delivered"
+      ],
+      "durationMs": 64064
+    },
+    {
+      "name": "reset fences an active run and leaves no late shipments in its replacement"
+    },
+    {
+      "name": "api interruption recovers and completes without duplicate shipments",
+      "recoveryAndCompletionMs": 26888
+    },
+    {
+      "name": "mqtt interruption recovers and completes without duplicate shipments",
+      "recoveryAndCompletionMs": 24873
+    },
+    {
+      "name": "mongo interruption recovers and completes without duplicate shipments",
+      "recoveryAndCompletionMs": 24983
+    }
+  ],
+  "completedAt": "2026-09-10T13:50:40.018Z",
+  "status": "passed"
+}

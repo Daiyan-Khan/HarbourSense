@@ -1,0 +1,15 @@
+{
+  "verifiedAt": "2026-09-10T13:51:36.2684328Z",
+  "container": "harboursense-demo-api-1",
+  "files": [
+    "demo_service.py",
+    "demo_runtime.py",
+    "manager.py",
+    "task_assigner.py",
+    "traffic_analyzer.py",
+    "main.py"
+  ],
+  "normalization": "CRLF to LF",
+  "mismatches": [],
+  "result": "All six running container source files match the final local source"
+}

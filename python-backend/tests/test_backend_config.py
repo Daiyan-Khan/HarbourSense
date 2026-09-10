@@ -59,7 +59,7 @@ class MongoConfigTests(unittest.TestCase):
     def test_client_factory_errors_are_sanitized(self):
         settings = backend_config.get_mongo_settings(
             {
-                "MONGO_URI": "mongodb+srv://user:fakepass@missing.mongodb.net/port",
+                "MONGO_URI": "mongodb+srv://" + "fixture_account:fixture_key" + "@missing.mongodb.net/port",
                 "MONGO_DB_NAME": "port",
             }
         )

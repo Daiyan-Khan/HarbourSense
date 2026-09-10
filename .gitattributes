@@ -1,2 +1,5 @@
 python-backend/entrypoint.sh text eol=lf
 port-sim/entrypoint.sh text eol=lf
+dashboard/visualizer/public/replays/*.json text eol=lf
+# Saved experiment byte hashes must survive checkout on Windows and Linux.
+evaluation/results/* -text

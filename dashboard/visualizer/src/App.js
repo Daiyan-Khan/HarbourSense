@@ -1,448 +1,105 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import ReactFlow, { Background, Controls, BaseEdge } from 'reactflow';
+import React, { useMemo, useCallback, useRef, useEffect } from 'react';
+import ReactFlow, { Background, Controls, BaseEdge, ReactFlowProvider, useReactFlow } from 'reactflow';
 import 'reactflow/dist/style.css';
-import axios from 'axios';
-import { getApiBaseUrl } from './apiConfig';
-import { StatusSidebar } from './StatusPanels';
+import './dashboard.css';
+import './portfolio.css';
+import { EdgeFleetPanel, ShipmentsPanel, PortBacklogPanel, SensorAlertsPanel, MaintenanceAlertsPanel, NextArrivalPanel } from './StatusPanels';
+import { DeviceDetailModal, SensorDetailModal, ShipmentDetailModal } from './DeviceDetailModal';
+import { Overview, ScenarioPanel, ShipmentJourney, EventTimeline, MaintenanceResponse } from './OperationsPanels';
+import { usePortDashboard } from './state/PortDashboardProvider';
+import { selectDataHealth } from './data/freshness';
+import { undirectedEdgeKey } from './map/layout';
+import PortNode from './nodes/PortNode';
+import DeviceMarkerNode from './nodes/DeviceMarkerNode';
 
-// Node & Device sizes
-const NODE_WIDTH = 150;
-const NODE_HEIGHT = 100;
-const DEVICE_SIZE = 30;
+const nodeTypes = { port: PortNode, device: DeviceMarkerNode };
+function SideEdge({ id, sourceX, sourceY, targetX, targetY, data }) {
+  const active = data?.active;
+  const selected = data?.selected;
+  return <BaseEdge id={id} path={`M${data?.sourceX ?? sourceX},${data?.sourceY ?? sourceY} L${data?.targetX ?? targetX},${data?.targetY ?? targetY}`}
+    className={`graph-edge${active ? ' graph-edge--active' : ''}${selected ? ' graph-edge--selected' : ''}`}
+    style={{ stroke: selected ? '#e39a24' : active ? '#00888b' : '#b8c9cd', strokeWidth: selected ? 5 : active ? 3 : 2, strokeDasharray: active ? '8 4' : undefined }} />;
+}
+const edgeTypes = { side: SideEdge };
 
-// Custom straight edge
-const SideEdge = ({ sourceX, sourceY, targetX, targetY, markerEnd }) => {
-  const edgePath = `M${sourceX},${sourceY} L${targetX},${targetY}`;
-  return <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ stroke: '#222', strokeWidth: 2 }} />;
-};
-
-// Compute device position with progress-based interpolation
-const computeDevicePosition = (device, nodePositions) => {
-  if (!device || !device.currentLocation) return { x: 0, y: 0 };
-
-  const startNode = device.currentLocation;
-  const endNode = device.nextNode;
-  const progress = device.progressToNext || 0; // 0-100, assume numeric
-
-  // If not en-route (progress 0 or no nextNode), position at current location
-  if (progress <= 0 || !endNode || typeof endNode !== 'string') {
-    const nodePos = nodePositions[startNode];
-    if (!nodePos) return { x: 0, y: 0 };
-    return {
-      x: nodePos.x + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
-      y: nodePos.y + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
-    };
-  }
-
-  // En-route: Interpolate between start and end based on progress (0% = start, 100% = end)
-  const startPos = nodePositions[startNode];
-  const endPos = nodePositions[endNode];
-  if (!startPos || !endPos) return { x: 0, y: 0 };
-
-  const progressRatio = progress / 100; // 0 to 1
-  const interpolatedX = startPos.x + (endPos.x - startPos.x) * progressRatio;
-  const interpolatedY = startPos.y + (endPos.y - startPos.y) * progressRatio;
-
-  return {
-    x: interpolatedX + NODE_WIDTH / 2 - DEVICE_SIZE / 2,
-    y: interpolatedY + NODE_HEIGHT / 2 - DEVICE_SIZE / 2,
-  };
-};
-
-// Map devices to React Flow nodes
-const mapDevicesToNodes = (devices, nodePositions) =>
-  devices.map((d) => {
-    const pos = computeDevicePosition(d, nodePositions);
-
-    let label = '⚙️';
-    let background = '#ccc';
-    let borderRadius = '50%';
-
-    const deviceType = (d.type || '').toLowerCase();
-
-    if (deviceType.includes('truck')) {
-      label = '🚚';
-      background = 'saddlebrown';
-      borderRadius = '5px';
-    } else if (deviceType.includes('conveyor')) {
-      label = '⬭';
-      background = 'grey';
-      borderRadius = '50% / 25%';
-    } else if (deviceType.includes('robot')) {
-      label = '🤖';
-      background = 'lightgreen';
-      borderRadius = '50%';
-    } else if (deviceType.includes('crane')) {
-      label = '🅰️';  // Crane icon approximation
-      background = 'darkblue';
-      borderRadius = '50%';
-    }
-
-    // Devices without type get a warning icon
-    if (!d.type) label = '⚠️';
-
-    return {
-      id: `dev-${d.id}`,
-      position: pos,
-      data: { 
-        label,
-        // Optional: Add progress label for visual feedback (e.g., tooltip or badge)
-        progress: d.progressToNext ? `${Math.round(d.progressToNext)}%` : null 
-      },
-      style: {
-        width: DEVICE_SIZE,
-        height: DEVICE_SIZE,
-        background,
-        borderRadius,
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        fontSize: 18,
-        cursor: 'pointer',
-        border: '1px solid #333',
-        // Pulse animation for moving devices (optional visual cue)
-        ...(d.progressToNext > 0 && d.progressToNext < 100 ? { 
-         boxShadow: '0 0 10px rgba(0, 123, 255, 0.5)' 
-        } : {}),
-      },
-      draggable: false,
-    };
-  });
-
-function App() {
-  const [graphNodes, setGraphNodes] = useState([]);
-  const [edges, setEdges] = useState([]);
-  const [liveEdges, setLiveEdges] = useState([]);
-  const [sensors, setSensors] = useState([]);
-  const [positions, setPositions] = useState({});
-  const [showSensorMenu, setShowSensorMenu] = useState(false);
-  const [selectedNodeSensors, setSelectedNodeSensors] = useState([]);
-  const [selectedSensor, setSelectedSensor] = useState(null);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [graphStatus, setGraphStatus] = useState('loading');
-  const [graphError, setGraphError] = useState(null);
-  const [liveDataError, setLiveDataError] = useState(null);
-  const [shipments, setShipments] = useState([]);
-  const [sensorAlerts, setSensorAlerts] = useState([]);
-  const [maintenanceAlerts, setMaintenanceAlerts] = useState([]);
-  const [panelErrors, setPanelErrors] = useState({
-    shipments: null,
-    sensorAlerts: null,
-    maintenanceAlerts: null,
-  });
-
-  const BASE_URL = getApiBaseUrl();
-
-  const edgeTypes = useMemo(
-    () => ({
-      side: ({ id, data, markerEnd }) => {
-        const { sourceX, sourceY, targetX, targetY } = data;
-        return <SideEdge id={id} sourceX={sourceX} sourceY={sourceY} targetX={targetX} targetY={targetY} markerEnd={markerEnd} />;
-      },
-    }),
-    []
-  );
-
-  // Grid layout: "A1" -> x,y
-  const gridLayout = (rawNodes) => {
-    const positions = {};
-    rawNodes.forEach((node) => {
-      const prefix = node.id.match(/[A-Z]+/)[0];
-      const suffix = parseInt(node.id.match(/[0-9]+/)[0], 10);
-
-      let row = 0;
-      for (let i = 0; i < prefix.length; i++) {
-        row = row * 26 + (prefix.charCodeAt(i) - 'A'.charCodeAt(0) + 1);
-      }
-      row -= 1;
-      const col = suffix - 1;
-
-      positions[node.id] = {
-        x: col * (NODE_WIDTH + 100),
-        y: row * (NODE_HEIGHT + 100),
-      };
-    });
-    return positions;
-  };
-
-  // Fetch graph nodes
+function FitMap({ ready, nodeCount }) {
+  const { fitView } = useReactFlow();
+  const fitRef = useRef(fitView);
+  fitRef.current = fitView;
+  const fit = useCallback(() => fitRef.current({ padding: 0.12, minZoom: 0.1, maxZoom: 1.2, duration: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 200 }), []);
   useEffect(() => {
-    const fetchGraph = async () => {
-      setGraphStatus('loading');
-      setGraphError(null);
-      try {
-        const res = await axios.get(`${BASE_URL}/api/graph`);
-        const rawNodes = Object.values(res.data.nodes || {});
-        if (rawNodes.length === 0) {
-          setGraphNodes([]);
-          setEdges([]);
-          setPositions({});
-          setGraphStatus('empty');
-          return;
-        }
-        const pos = gridLayout(rawNodes);
-        setPositions(pos);
-
-        const gNodes = rawNodes.map((n) => ({
-          id: n.id,
-          data: { label: `${n.id} (${n.type || 'unknown'})` },
-          position: pos[n.id],
-          style: {
-            width: NODE_WIDTH,
-            height: NODE_HEIGHT,
-            border: '2px solid #444',
-            borderRadius: 6,
-            background: '#f8f8f8',
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-          },
-        }));
-
-        const graphEdges = [];
-        rawNodes.forEach((node) => {
-          Object.values(node.neighbors || {}).forEach((nbrId) => {
-            const srcPos = pos[node.id];
-            const tgtPos = pos[nbrId];
-            if (!srcPos || !tgtPos) return;
-
-            let sourceX, sourceY, targetX, targetY;
-            if (srcPos.y === tgtPos.y) {
-              sourceX = srcPos.x + NODE_WIDTH;
-              sourceY = srcPos.y + NODE_HEIGHT / 2;
-              targetX = tgtPos.x;
-              targetY = tgtPos.y + NODE_HEIGHT / 2;
-            } else if (srcPos.x === tgtPos.x) {
-              sourceX = srcPos.x + NODE_WIDTH / 2;
-              sourceY = srcPos.y + NODE_HEIGHT;
-              targetX = tgtPos.x + NODE_WIDTH / 2;
-              targetY = tgtPos.y;
-            } else {
-              sourceX = srcPos.x + NODE_WIDTH / 2;
-              sourceY = srcPos.y + NODE_HEIGHT / 2;
-              targetX = tgtPos.x + NODE_WIDTH / 2;
-              targetY = tgtPos.y + NODE_HEIGHT / 2;
-            }
-
-            graphEdges.push({
-              id: `${node.id}-${nbrId}`,
-              source: node.id,
-              target: nbrId,
-              type: 'side',
-              data: { sourceX, sourceY, targetX, targetY },
-            });
-          });
-        });
-
-        setGraphNodes(gNodes);
-        setEdges(graphEdges);
-        setGraphStatus('ready');
-      } catch (err) {
-        console.error('Error fetching graph:', err);
-        setGraphStatus('error');
-        setGraphError(err?.response?.data?.detail || err?.message || 'Unable to load port graph');
-      }
-    };
-    fetchGraph();
-  }, [BASE_URL]);
-
-  // Fetch live devices, sensors, shipments, and alerts
-  useEffect(() => {
-    const fetchLiveData = async () => {
-      const nextPanelErrors = {
-        shipments: null,
-        sensorAlerts: null,
-        maintenanceAlerts: null,
-      };
-
-      try {
-        const edgesRes = await axios.get(`${BASE_URL}/api/edges`);
-        setLiveEdges(edgesRes.data);
-
-        const sensorsRes = await axios.get(`${BASE_URL}/api/sensors`);
-        const uniqueSensors = Array.from(new Map(sensorsRes.data.map((s) => [s.id, s])).values());
-        setSensors(uniqueSensors);
-        setLiveDataError(null);
-      } catch (error) {
-        console.error('Error fetching live data:', error);
-        setLiveDataError(error?.response?.data?.detail || error?.message || 'Unable to refresh live device data');
-      }
-
-      try {
-        const shipmentsRes = await axios.get(`${BASE_URL}/api/shipments`);
-        setShipments(Array.isArray(shipmentsRes.data) ? shipmentsRes.data : []);
-      } catch (error) {
-        nextPanelErrors.shipments = error?.response?.data?.detail?.message
-          || error?.message
-          || 'Unable to load shipments';
-      }
-
-      try {
-        const sensorAlertsRes = await axios.get(`${BASE_URL}/api/alerts/sensor`);
-        setSensorAlerts(Array.isArray(sensorAlertsRes.data) ? sensorAlertsRes.data : []);
-      } catch (error) {
-        nextPanelErrors.sensorAlerts = error?.response?.data?.detail?.message
-          || error?.message
-          || 'Unable to load sensor alerts';
-      }
-
-      try {
-        const maintenanceAlertsRes = await axios.get(`${BASE_URL}/api/alerts/maintenance`);
-        setMaintenanceAlerts(Array.isArray(maintenanceAlertsRes.data) ? maintenanceAlertsRes.data : []);
-      } catch (error) {
-        nextPanelErrors.maintenanceAlerts = error?.response?.data?.detail?.message
-          || error?.message
-          || 'Unable to load maintenance alerts';
-      }
-
-      setPanelErrors(nextPanelErrors);
-    };
-    if (graphStatus === 'ready') {
-      fetchLiveData();
-      const interval = setInterval(fetchLiveData, 3000);
-      return () => clearInterval(interval);
-    }
-    return undefined;
-  }, [BASE_URL, graphStatus]);
-
-  // Log updates whenever liveEdges change (optional: show every 20% progress in console)
-  useEffect(() => {
-    if (liveEdges.length > 0) {
-      console.log('Edges updated:', {
-        count: liveEdges.length,
-        sample: liveEdges.slice(0, 3), // Log first 3 for brevity
-      });
-      // Log progress milestones (every 20%) for debugging/monitoring
-      liveEdges.forEach((edge) => {
-        if (edge.progressToNext && typeof edge.progressToNext === 'number') {
-          const progress = Math.round(edge.progressToNext);
-          if (progress > 0 && progress % 20 === 0) {
-            console.log(`[PROGRESS ${progress}%] ${edge.id} traveling to ${edge.nextNode}`);
-          }
-        }
-      });
-    }
-  }, [liveEdges]);
-
-  const onNodeClick = (event, node) => {
-    if (node.id.startsWith('dev-')) {
-      const devId = node.id.substring(4);
-      const dev = liveEdges.find((d) => d.id === devId);
-      if (dev) setSelectedDevice(dev);
-    } else {
-      const nodeSensors = sensors.filter((s) => s.node === node.id);
-      setSelectedNodeSensors(nodeSensors);
-      setShowSensorMenu(true);
-      setSelectedSensor(null);
-    }
-  };
-
-  return (
-    <div style={{ height: '100vh' }}>
-      <h2>HarbourSense Smart Port</h2>
-      {graphStatus === 'loading' && (
-        <p role="status">Loading port graph…</p>
-      )}
-      {graphStatus === 'error' && (
-        <p role="alert">Graph unavailable: {graphError}</p>
-      )}
-      {graphStatus === 'empty' && (
-        <p role="status">Port graph is empty. Seed MongoDB graph data before using the dashboard.</p>
-      )}
-      {liveDataError && graphStatus === 'ready' && (
-        <p role="alert">Live data warning: {liveDataError}</p>
-      )}
-      {graphStatus === 'ready' && (
-        <StatusSidebar
-          shipments={shipments}
-          sensorAlerts={sensorAlerts}
-          maintenanceAlerts={maintenanceAlerts}
-          panelErrors={panelErrors}
-        />
-      )}
-      <ReactFlow
-        nodes={[...graphNodes, ...mapDevicesToNodes(liveEdges, positions)]}
-        edges={edges}
-        edgeTypes={edgeTypes}
-        onNodeClick={onNodeClick}
-        fitView
-      >
-        <Background />
-        <Controls />
-      </ReactFlow>
-
-      {/* Sensor popup */}
-      {showSensorMenu && (
-        <div style={{
-          position: 'fixed', top: '20%', left: '30%', background: 'white',
-          padding: 20, border: '1px solid #aaa', borderRadius: 8,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.08)', minWidth: 400,
-          maxHeight: '60vh', overflowY: 'auto', zIndex: 1000
-        }}>
-          <h3>Sensors at Node</h3>
-          <ul style={{ listStyle: 'none', padding: 0, marginBottom: 10 }}>
-            {selectedNodeSensors.map((sensor) => (
-              <li key={sensor.id} style={{ marginBottom: 8 }}>
-                <button
-                  style={{
-                    padding: '6px 12px',
-                    borderRadius: 5,
-                    border: '1px solid #ddd',
-                    background: selectedSensor && selectedSensor.id === sensor.id ? '#007bff' : '#f0f0f3',
-                    color: selectedSensor && selectedSensor.id === sensor.id ? 'white' : 'black',
-                    cursor: 'pointer',
-                    width: '100%',
-                    display: 'block',
-                  }}
-                  onClick={() => setSelectedSensor(sensor)}
-                >
-                  {sensor.type || 'unknown'} ({sensor.id})
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button onClick={() => setShowSensorMenu(false)} style={{ marginTop: 5 }}>Close</button>
-
-          {selectedSensor && (
-            <div style={{ marginTop: 20, borderTop: '1px solid #ddd', paddingTop: 12 }}>
-              <h4>Sensor Data</h4>
-              {Object.entries(selectedSensor).map(([k, v]) => (
-                <p key={k}><b>{k}:</b> {String(v)}</p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Device popup */}
-      {selectedDevice && (
-        <div style={{
-          position: 'fixed', top: '20%', left: '35%', background: 'white',
-          padding: 20, border: '1px solid #aaa', borderRadius: 8,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.12)', minWidth: 400, zIndex: 2000
-        }}>
-          <h3>Device Details</h3>
-          <p><b>Name:</b> {selectedDevice.id}</p>
-          <p><b>Description:</b> {selectedDevice.desc || 'N/A'}</p>
-          {/* FIXED: Handle task as object - show phase/task summary or stringify */}
-          <p><b>Task:</b> {selectedDevice.task 
-            ? (typeof selectedDevice.task === 'object' 
-                ? `${selectedDevice.task.phase || 'unknown'} - ${selectedDevice.task.task || 'N/A'} (Shipment: ${selectedDevice.task.shipmentId || 'N/A'})` 
-                : selectedDevice.task) 
-            : 'N/A'}</p>
-          <p><b>Priority:</b> {selectedDevice.prio || selectedDevice.priority || 'N/A'}</p>
-          <p><b>Current Location:</b> {selectedDevice.currentLocation || 'N/A'}</p>
-          <p><b>Next Node:</b> {selectedDevice.nextNode || 'N/A'}</p>
-          <p><b>Final Node:</b> {selectedDevice.finalNode || 'N/A'}</p>
-          <p><b>Progress to Next:</b> {selectedDevice.progressToNext ? `${Math.round(selectedDevice.progressToNext)}%` : 'N/A'}</p>
-          <p><b>ETA:</b> {selectedDevice.eta ? `${selectedDevice.eta}s` : 'N/A'}</p>
-          <p><b>Task Completion Time:</b> {selectedDevice.taskCompletionTime ? `${selectedDevice.taskCompletionTime}s` : 'Not Started'}</p>
-          <p><b>Total Journey Time:</b> {selectedDevice.journeyTime ? `${selectedDevice.journeyTime}s` : 'N/A'}</p>
-          <button onClick={() => setSelectedDevice(null)} style={{ marginTop: 10 }}>Close</button>
-        </div>
-      )}
-    </div>
-  );
+    if (!ready || !nodeCount) return undefined;
+    const timer = window.setTimeout(fit, 150);
+    return () => window.clearTimeout(timer);
+  }, [ready, nodeCount, fit]);
+  return <button className="map-fit-button" type="button" onClick={fit} aria-label="Fit full port">⊞ Fit port</button>;
 }
 
+function PortMap({ nodes, edges, onNodeClick, graphNodeCount }) {
+  return <ReactFlowProvider><div className="dashboard-flow" aria-label="Interactive port map">
+    <ReactFlow nodes={nodes} edges={edges} edgeTypes={edgeTypes} nodeTypes={nodeTypes} onNodeClick={onNodeClick}
+      minZoom={0.1} maxZoom={2} nodesDraggable={false} nodesConnectable={false} elementsSelectable
+      fitView fitViewOptions={{ padding: 0.12, minZoom: 0.1 }} proOptions={{ hideAttribution: true }}>
+      <Background color="#cbdcde" gap={24} size={1} />
+      <Controls showInteractive={false} showFitView={false} />
+      <FitMap ready nodeCount={graphNodeCount} />
+    </ReactFlow>
+  </div></ReactFlowProvider>;
+}
+
+function App() {
+  const { state, flowNodes, flowEdges, portStateView, selectedDevice, nodeSensors, selectDevice, selectSensorNode, selectShipment, retry, frameNow } = usePortDashboard();
+  const { graph, live, panels, ui, source } = state;
+  const health = selectDataHealth(state, frameNow);
+  const sourceLabel = source.kind === 'replay' ? 'Recorded simulation' : source.kind === 'demo' ? 'Local demo' : 'Live data source';
+  const selectedShipment = panels.shipments.find((item) => item.id === ui.selectedShipmentId);
+  const selectedEdges = useMemo(() => {
+    const path = selectedDevice?.remainingPath || selectedDevice?.path || [];
+    const route = [selectedDevice?.currentLocation, ...path].filter(Boolean);
+    if (selectedDevice?.nextNode) route.splice(1, 0, selectedDevice.nextNode);
+    const keys = new Set(route.slice(1).map((id, index) => undirectedEdgeKey(route[index], id)));
+    return flowEdges.map((edge) => ({ ...edge, data: { ...edge.data, selected: keys.has(edge.id) } }));
+  }, [selectedDevice, flowEdges]);
+  const onNodeClick = useCallback((_event, node) => {
+    if (node.id.startsWith('dev-')) selectDevice(node.id.slice(4));
+    else selectSensorNode(node.id);
+  }, [selectDevice, selectSensorNode]);
+
+  return <div className="dashboard-root">
+    <a className="skip-link" href="#operations-map">Skip to port map</a>
+    <header className="dashboard-header">
+      <div className="brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 21h20M9 21V9l12-4v16M21 5h6v4h-6M6 26c3-3 6 3 10 0s7 3 10 0" fill="none" stroke="currentColor" strokeWidth="2" /></svg></span><div><h1>HarbourSense <span>Smart Port</span></h1><p>Connected operations, in view.</p></div></div>
+      <div className="dashboard-header-meta"><span className="source-pill">{sourceLabel}</span><span className={`health-pill health-pill--${health.tone}`}><span aria-hidden="true">●</span>{health.label}</span></div>
+    </header>
+    <div className="workspace-heading"><div><span className="eyebrow">Harbour control / Overview</span><h2>A port in motion.</h2><p>Follow the cargo. Understand the decisions.</p></div><div className="freshness-note"><span>{health.ageLabel}</span><small>{source.kind === 'replay' ? (source.recordedAt ? `Captured ${new Date(source.recordedAt).toLocaleDateString()}` : 'Loading verified recordings') : source.transport || 'Connecting to local services'}</small>{(health.tone !== 'ok' || graph.status === 'error') && <button className="text-button" type="button" onClick={retry}>Retry connection</button>}</div></div>
+    <Overview />
+    <ScenarioPanel />
+    {graph.status === 'loading' && <div className="dashboard-banner dashboard-banner--info" role="status">Loading port graph…</div>}
+    {graph.status === 'error' && <div className="dashboard-banner dashboard-banner--error" role="alert">Graph unavailable: {graph.error} <button type="button" onClick={retry}>Try again</button></div>}
+    {graph.status === 'empty' && <div className="dashboard-banner dashboard-banner--info" role="status">Port graph is empty. Start the isolated local demo to seed its port map.</div>}
+    {live.error && graph.status === 'ready' && <div className="dashboard-banner dashboard-banner--warn" role="alert">Live data warning: {live.error}. The last received snapshot is retained.</div>}
+    <main className="portfolio-main">
+      <div className="primary-column">
+        <section className="map-panel" id="operations-map" tabIndex="-1" aria-label="Port overview">
+          <div className="section-heading"><div><span className="eyebrow">Spatial operations</span><h2>Port overview <span className="count-label">{graph.rawNodes.length} locations</span></h2></div><span className="map-hint">Select a device to inspect its route</span></div>
+          {graph.status === 'ready' ? <PortMap nodes={flowNodes} edges={selectedEdges} onNodeClick={onNodeClick} graphNodeCount={graph.graphNodes.length} /> : <div className="map-empty"><span aria-hidden="true">⌁</span><h3>{graph.status === 'error' ? 'The port is temporarily unavailable' : 'Preparing your port overview'}</h3><p>{graph.status === 'error' ? 'Use the retry action above to reconnect.' : 'Locations and devices will appear when the data source is ready.'}</p></div>}
+          <div className="map-footer" aria-label="Map legend"><span><i className="legend-dot legend-dot--dock" />Dock / berth</span><span><i className="legend-dot legend-dot--warehouse" />Warehouse</span><span><i className="legend-line" />Active route</span><span><i className="legend-line legend-line--selected" />Selected route</span><small>Scroll to zoom · drag to pan</small></div>
+        </section>
+        <ShipmentJourney />
+        <MaintenanceResponse />
+        <EventTimeline />
+      </div>
+      <aside className="operations-rail" aria-label="Fleet and diagnostics">
+        <EdgeFleetPanel devices={live.edges} error={live.error} selectedDeviceId={ui.selectedDeviceId} onSelectDevice={selectDevice} idleEdgeDiagnosticsById={portStateView.idleEdgeDiagnosticsById} />
+        <details className="diagnostic-section"><summary>Shipment details & backlog</summary><ShipmentsPanel shipments={panels.shipments} error={panels.errors.shipments} shipmentDiagnosticsById={portStateView.shipmentDiagnosticsById} /><PortBacklogPanel pendingBacklog={portStateView.pendingBacklog} queueCounts={portStateView.queueCounts} error={panels.errors.portState} />{source.kind === 'live' && <NextArrivalPanel shipments={panels.shipments} error={panels.errors.shipments} nowMs={frameNow} />}</details>
+        <details className="diagnostic-section" open={Boolean(panels.sensorAlerts.length || panels.maintenanceAlerts.length)}><summary>Alerts & maintenance <span>{panels.sensorAlerts.length + panels.maintenanceAlerts.length}</span></summary><SensorAlertsPanel alerts={panels.sensorAlerts} error={panels.errors.sensorAlerts} /><MaintenanceAlertsPanel alerts={panels.maintenanceAlerts} error={panels.errors.maintenanceAlerts} /></details>
+        <div className="engineering-note"><span className="eyebrow">Under the surface</span><p>Devices coordinate over MQTT. The local system combines live telemetry, route planning and anomaly detection.</p><p>{source.kind === 'replay' ? 'This view replays captured outputs from that pipeline. It does not run a hosted prediction model.' : 'Inspect a device or shipment to see its assignment and operational context.'}</p></div>
+      </aside>
+    </main>
+    <footer className="dashboard-footer"><span>HarbourSense · Smart port operations</span><span>{source.kind === 'replay' ? 'Synthetic scenario data · independent browser playback' : 'Telemetry freshness: 15s · panel freshness: 30s'}</span></footer>
+    {selectedDevice && <DeviceDetailModal device={selectedDevice} history={state.telemetryHistory} sensors={panels.sensors} craneTelemetry={panels.craneTelemetry} maintenanceAlerts={panels.maintenanceHistory.length ? panels.maintenanceHistory : panels.maintenanceAlerts} onClose={() => selectDevice(null)} />}
+    {ui.sensorNodeId && <SensorDetailModal sensors={nodeSensors} nodeId={ui.sensorNodeId} onClose={() => selectSensorNode(null)} />}
+    {selectedShipment && <ShipmentDetailModal shipment={selectedShipment} diagnostic={portStateView.shipmentDiagnosticsById[selectedShipment.id]} onClose={() => selectShipment(null)} />}
+  </div>;
+}
 export default App;

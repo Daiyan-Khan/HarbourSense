@@ -1,0 +1,21 @@
+{
+  "status": "passed",
+  "startedAt": "2026-09-10T13:40:08.436Z",
+  "completedAt": "2026-09-10T13:41:33.841Z",
+  "checks": [
+    "CLI stop pauses the active run; start preserves run id, shipment ids, clock and paused device progress",
+    "Preserved run resumes its clock and acknowledges another pause"
+  ],
+  "runId": "73c162cca7b44481b1d8fc95e2157480",
+  "runIdAfterRestart": "73c162cca7b44481b1d8fc95e2157480",
+  "statusAfterRestart": "paused",
+  "resumedAtSimTimeMs": 5510,
+  "platform": "win32",
+  "node": "v24.12.0",
+  "dockerServer": "29.1.3",
+  "compose": "2.40.3-desktop.1",
+  "limitations": [
+    "Single local Docker Desktop host; bounded normal-scenario recovery checks, not load or scale testing.",
+    "Public replay and native recording processes were not controlled by this verification."
+  ]
+}

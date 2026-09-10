@@ -1,0 +1,125 @@
+# Self-contained local demo. Never loads the user's Atlas .env.
+name: harboursense-demo
+
+x-demo-environment: &demo-environment
+  DEMO_MODE: "true"
+  DEMO_SPEC_DIR: /demo
+  MONGO_URI: mongodb://mongo:27017/harboursense_demo
+  MONGO_DB_NAME: harboursense_demo
+  MONGO_SERVER_SELECTION_TIMEOUT_MS: "5000"
+  MQTT_MODE: local
+  MQTT_BROKER_HOST: mqtt
+  MQTT_BROKER_PORT: "1883"
+  BACKEND_LOG_LEVEL: INFO
+  PYTHONUNBUFFERED: "1"
+  FRONTEND_ORIGINS: "http://localhost:${DEMO_DASHBOARD_PORT:-3000},http://127.0.0.1:${DEMO_DASHBOARD_PORT:-3000}"
+
+x-demo-service: &demo-service
+  restart: unless-stopped
+  init: true
+  logging:
+    driver: json-file
+    options:
+      max-size: 5m
+      max-file: "2"
+
+services:
+  mongo:
+    <<: *demo-service
+    image: mongo:8.0
+    command: [mongod, --wiredTigerCacheSizeGB, "0.25"]
+    volumes: [demo_mongo:/data/db]
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    mem_limit: 768m
+
+  mqtt:
+    <<: *demo-service
+    image: eclipse-mosquitto:2
+    volumes: [./mosquitto/conf/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro]
+    healthcheck:
+      test: [CMD, mosquitto_pub, -h, 127.0.0.1, -t, harboursense/health/broker, -m, ready]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *demo-service
+    build: ./python-backend
+    environment: *demo-environment
+    entrypoint: [python, -m, uvicorn]
+    command: ["main:app", --host, "0.0.0.0", --port, "8000"]
+    volumes: [./demo:/demo:ro]
+    ports: ["127.0.0.1:${DEMO_API_PORT:-8000}:8000"]
+    depends_on:
+      mongo: {condition: service_healthy}
+      mqtt: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready',timeout=4)"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  manager:
+    <<: *demo-service
+    build: ./python-backend
+    environment: *demo-environment
+    entrypoint: [python]
+    command: [manager.py]
+    volumes: [./demo:/demo:ro]
+    depends_on:
+      api: {condition: service_healthy}
+
+  portsim:
+    <<: *demo-service
+    build: ./port-sim
+    environment: *demo-environment
+    command: [node, port.js]
+    volumes: [./demo:/demo:ro]
+    depends_on:
+      api: {condition: service_healthy}
+
+  sensors:
+    <<: *demo-service
+    build: ./port-sim
+    environment: *demo-environment
+    command: [node, sensors.js]
+    volumes: [./demo:/demo:ro]
+    depends_on:
+      api: {condition: service_healthy}
+
+  analyzer:
+    <<: *demo-service
+    build: ./edge-analyzer
+    environment:
+      <<: *demo-environment
+      PYTHONPATH: /runtime
+    volumes:
+      - ./demo:/demo:ro
+      - ./python-backend/demo_runtime.py:/runtime/demo_runtime.py:ro
+      - ./python-backend/backend_config.py:/runtime/backend_config.py:ro
+    depends_on:
+      api: {condition: service_healthy}
+
+  dashboard:
+    <<: *demo-service
+    build:
+      context: ./dashboard/visualizer
+      args:
+        REACT_APP_DATA_SOURCE: live
+        REACT_APP_API_BASE_URL: "http://localhost:${DEMO_API_PORT:-8000}"
+        PUBLIC_URL: /
+    ports: ["127.0.0.1:${DEMO_DASHBOARD_PORT:-3000}:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  demo_mongo:

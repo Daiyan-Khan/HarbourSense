@@ -1,5 +1,5 @@
 # Dockerfile for Node.js Port Simulator
-FROM node:18-slim
+FROM node:24-slim
 
 WORKDIR /app
 
@@ -9,9 +9,6 @@ RUN npm ci
 
 # Copy simulation code
 COPY . ./
-
-# Copy certs for AWS IoT
-COPY certs/ ./certs/
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

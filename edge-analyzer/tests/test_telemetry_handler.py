@@ -50,6 +50,25 @@ class TelemetryHandlerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             process_telemetry(payload, self.model)
 
+    def test_alert_preserves_demo_identity_and_score_without_advance_prediction_claim(self):
+        payload = {"motorTemp": 200, "vibration": 5, "energyUse": 500,
+                   "craneId": "crane001", "runId": "a" * 32, "scenarioId": "crane-fault",
+                   "eventId": "sample-12", "sequence": 12, "simulatedTimeMs": 12000}
+        alert, error = process_telemetry(payload, self.model)
+        self.assertIsNone(error)
+        self.assertEqual(alert["eventId"], "sample-12-alert")
+        self.assertEqual(alert["runId"], payload["runId"])
+        self.assertEqual(alert["simulatedTimeMs"], 12000)
+        self.assertGreater(alert["analysis"]["anomalyScore"], 0)
+        self.assertIn("synthetic", alert["reason"])
+
+    def test_nonobject_and_invalid_utf8_messages_are_rejected(self):
+        for raw, expected in ((b"[]", "payload"), (b"null", "payload"), (b'"text"', "payload"), (b"\xff", "json")):
+            with self.subTest(raw=raw):
+                alert, error = decode_telemetry_message(raw, self.model)
+                self.assertIsNone(alert)
+                self.assertEqual(error, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

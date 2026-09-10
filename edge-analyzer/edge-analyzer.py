@@ -51,7 +51,7 @@ def on_message(client, userdata, msg):
 
     try:
         data = json.loads(msg.payload)
-    except json.JSONDecodeError as error:
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
         malformed_payload_count += 1
         logger.warning(
             "Malformed telemetry JSON topic=%s error=%s malformedCount=%s",
@@ -87,6 +87,16 @@ def on_message(client, userdata, msg):
 
 def main():
     load_model()
+
+    if os.environ.get("DEMO_MODE", "").lower() == "true":
+        import asyncio
+        import sys
+        from demo_analyzer import run_demo_analyzer
+
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        asyncio.run(run_demo_analyzer(model))
+        return
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.on_connect = on_connect

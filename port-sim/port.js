@@ -1,3 +1,6 @@
+if (process.env.DEMO_MODE === 'true') {
+  require('./lib/demo-simulator').main('portsim').catch((error) => { console.error(error.message); process.exitCode = 1; });
+} else {
 const fs = require('fs');
 const { MongoClient } = require('mongodb');
 const {
@@ -6,7 +9,6 @@ const {
   getMongoSettings,
   getMqttBrokerLabel,
   getSimulatorSettings,
-  pickShipmentIntervalMs,
 } = require('./runtime-config');
 const {
   craneTelemetryTopic,
@@ -16,888 +18,129 @@ const {
   buildCraneTelemetryPayload,
   isCraneActive,
 } = require('./lib/crane-telemetry');
-
-
-// Setup logging to log.txt
-const logStream = fs.createWriteStream('log.txt', { flags: 'a' });
-
-
-const originalConsoleLog = console.log;
-console.log = function(...args) {
-  originalConsoleLog.apply(console, args);
-  logStream.write(args.join(' ') + '\n');
-};
-
-
-const originalConsoleError = console.error;
-console.error = function(...args) {
-  originalConsoleError.apply(console, args);
-  logStream.write('[ERROR] ' + args.join(' ') + '\n');
-};
-
+const { TaskPhase, IDLE_DEFAULTS } = require('./lib/edge-phases');
+const { edgeAutonomousLoop } = require('./lib/edge-autonomous-loop');
+const { createMqttMessageHandler } = require('./lib/mqtt-handlers');
+const { generateShipmentsPeriodically } = require('./lib/shipment-generator');
+const { runtimeCollection, runtimeDocumentFromSeed } = require('./lib/edge-collections');
 
 const mongoSettings = getMongoSettings();
 const simulatorSettings = getSimulatorSettings();
 const device = createMqttDevice('port_simulator');
 const mqttBrokerLabel = getMqttBrokerLabel();
+const client = createMongoClient(MongoClient, mongoSettings);
 
+const suggestionsByEdge = {};
 
-// Global cache for traffic suggestions and paths from MQTT
-let suggestionsByEdge = {};
-
-
-// Constants for ETA calculation
-const NODE_BASE_DISTANCE = 100;
-const EDGE_SPEEDS = {
-  truck: 10,
-  truck_tempo: 10,
-  truck_delivery: 10,
-  agv: 8,
-  conveyor: 5,
-  crane: 4,
-  forklift: 4,
-  robot: 6,
-  unknown: 5
-};
-
-
-// Enum for states
-const TaskPhase = Object.freeze({
-  IDLE: 'idle',
-  EN_ROUTE_START: 'en_route_start',
-  ASSIGNED: 'assigned',
-  COMPLETING: 'completing'
-});
-
-const NULL_SENTINELS = new Set([null, undefined, 'Null', 'null', 'None', 'undefined', '']);
-
-function isNullSentinel(value) {
-  return NULL_SENTINELS.has(value);
-}
-
-
-// FIXED: Default idle attributes (null instead of 'Null' for better Mongo handling)
-const IDLE_DEFAULTS = {
-  task: 'idle',          // String, not object
-  taskPhase: 'idle',     // Explicit phase (standardize casing)
-  path: [],              // NEW: Clear stale paths (len=0)
-  remainingPath: [],     // NEW: If tracked separately in sim
-  nextNode: null,
-  finalNode: null,
-  startNode: null,
-  eta: null,
-  journeyTime: null,
-  shipmentId: null,
-  assignedShipment: null, // NEW: Break shipment links
-  taskCompletionTime: 0, // NEW: Reset sim timers
-  priority: null,        // NEW: If set per-task
-  updatedAt: new Date().toISOString()  // NEW: Fresh timestamp for DB
-  // Note: currentLocation stays (edge at final spot); speed/roles persistent
-};
-
-
-// Transition functions
-function transitionToIdle(currentEdge) {
-  console.log(`Transitioning ${currentEdge.id} to IDLE; resetting attributes`);
-  return { ...IDLE_DEFAULTS, taskPhase: TaskPhase.IDLE };
-}
-
-
-// FIXED: Relaxed check—allow if idle OR already en_route_start for this task (race tolerance)
-function transitionToEn_routeStart(currentEdge, taskData) {
-  // FIXED: Relax check—allow if idle OR already en_route_start for this task (race tolerance)
-  if (!currentEdge || 
-      (currentEdge.taskPhase !== TaskPhase.IDLE && 
-       !(currentEdge.taskPhase === TaskPhase.EN_ROUTE_START && 
-         currentEdge.task?.phase === taskData.phase && 
-         currentEdge.shipmentId === taskData.shipmentId))) {
-    throw new Error(`Can only assign task from IDLE (or edge is null). Current: ${currentEdge?.taskPhase}`);
-  }
-
-  console.log(`Transitioning ${currentEdge.id} to EN_ROUTE_START with task ${taskData.task}`);
-  return {
-    task: taskData.task,
-    taskPhase: TaskPhase.EN_ROUTE_START,
-    startNode: taskData.startNode || null,
-    finalNode: taskData.finalNode || null,
-    path: taskData.path || [],
-    eta: null,
-    journeyTime: 0,
-    shipmentId: taskData.shipmentId || null
+if (simulatorSettings.simLogToFile) {
+  const logStream = fs.createWriteStream('log.txt', { flags: 'a' });
+  const originalConsoleLog = console.log;
+  const originalConsoleError = console.error;
+  console.log = function logWithFile(...args) {
+    originalConsoleLog.apply(console, args);
+    logStream.write(`${new Date().toISOString()} ${args.join(' ')}\n`);
+  };
+  console.error = function errorWithFile(...args) {
+    originalConsoleError.apply(console, args);
+    logStream.write(`${new Date().toISOString()} [ERROR] ${args.join(' ')}\n`);
   };
 }
 
-
-function transitionToAssigned(currentEdge) {
-  if (!currentEdge || currentEdge.taskPhase !== TaskPhase.EN_ROUTE_START) {  // FIXED: Null check
-    throw new Error('Can only transition to ASSIGNED from EN_ROUTE_START');
-  }
-
-
-  console.log(`Transitioning ${currentEdge.id} to ASSIGNED (path empty, start reached)`);
-  return { taskPhase: TaskPhase.ASSIGNED };
-}
-
-
-function transitionToCompleting(currentEdge) {
-  if (!currentEdge || currentEdge.taskPhase !== TaskPhase.ASSIGNED) {  // FIXED: Null check
-    throw new Error('Can only transition to COMPLETING from ASSIGNED');
-  }
-
-
-  console.log(`Transitioning ${currentEdge.id} to COMPLETING (path empty, destination reached); presetting nulls`);
-  return {
-    taskPhase: TaskPhase.COMPLETING,
-    nextNode: null,
-    finalNode: null,
-    eta: null,
-    journeyTime: null,
-    path: [],
-    shipmentId: currentEdge.shipmentId
-  };
-}
-
-
-// Helper to update state and log changes
-async function updateEdgeState(db, edgeId, updates) {
-  const edgeBefore = await db.collection('edgeDevices').findOne({ id: edgeId });
-  await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: updates });
-  const edgeAfter = await db.collection('edgeDevices').findOne({ id: edgeId });
-
-  // FIXED: Stringify objects for readable logs; skip if task is string ('idle')
-  
-  if (edgeAfter && edgeAfter.task !== 'awaiting task') {  // Skip logging if awaiting
-    if (edgeBefore && edgeAfter && edgeBefore.task !== edgeAfter.task) {
-    const oldTaskStr = typeof edgeBefore.task === 'string' ? edgeBefore.task : JSON.stringify({phase: edgeBefore.task?.phase, shipmentId: edgeBefore.task?.shipmentId});
-    const newTaskStr = typeof edgeAfter.task === 'string' ? edgeAfter.task : JSON.stringify({phase: edgeAfter.task?.phase, shipmentId: edgeAfter.task?.shipmentId});
-    console.log(`Edge ${edgeId} task changed: ${oldTaskStr} -> ${newTaskStr}`);
-  }
-    if (edgeBefore && edgeBefore.taskPhase !== edgeAfter.taskPhase) {
-      console.log(`Edge ${edgeId} phase changed: ${edgeBefore.taskPhase} -> ${edgeAfter.taskPhase}`);
-    }
-    if (edgeBefore && edgeBefore.currentLocation !== edgeAfter.currentLocation) {
-      console.log(`Edge ${edgeId} location changed: ${edgeBefore.currentLocation} -> ${edgeAfter.currentLocation}`);
-    }
-    if (edgeBefore && edgeBefore.shipmentId !== edgeAfter.shipmentId) {
-      console.log(`Edge ${edgeId} shipment changed: ${edgeBefore.shipmentId} -> ${edgeAfter.shipmentId}`);
-    }
-  }
-
-
-  return edgeAfter;
-}
-
-
-// Calculate distance (Manhattan on grid)
-function nodeDistance(a, b) {
-  if (!a || typeof a !== 'string' || !b || typeof b !== 'string') {
-    console.warn('Invalid or null nodes in nodeDistance:', a, b);
-    return 0;
-  }
-
-
-  const matchA = a.match(/([A-Z]+)([0-9]+)/);
-  const matchB = b.match(/([A-Z]+)([0-9]+)/);
-
-
-  if (!matchA || !matchB) {
-    console.warn('Invalid node format in nodeDistance:', a, b);
-    return 0;
-  }
-
-
-  const colA = matchA[1];
-  const rowA = parseInt(matchA[2], 10);
-  const colB = matchB[1];
-  const rowB = parseInt(matchB[2], 10);
-
-
-  return Math.abs(rowA - rowB) + Math.abs(colA.charCodeAt(0) - colB.charCodeAt(0));
-}
-
-// FIXED: Task execution with shipment updates + dynamic duration + more debug + chaining
-async function executeTask(edgeId, db, device, edge, taskData, steps = 5) {  // Add edge, taskData, steps params
-  if (!edge || !taskData) {
-    console.error(`Missing edge/taskData for executeTask ${edgeId} - FORCING IDLE RESET`);
-    await updateEdgeState(db, edgeId, transitionToIdle(edge || { id: edgeId }));
-    return;
-  }
-
-
-  console.log(`[DEBUG EXECUTE] Starting task execution for ${edgeId} (phase: ${taskData.phase || 'unknown'}, steps: ${steps}, duration: ${steps * 2}s, location: ${edge.currentLocation}, shipment: ${edge.shipmentId})`);
-
-
-  // FIXED: Set completing phase first (loop may watch this)
-  await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { taskPhase: TaskPhase.COMPLETING } });
-  edge.taskPhase = TaskPhase.COMPLETING;
-
-
-  // Dynamic loop: progress based on steps (e.g., 2s/step for offload/transport)
-  for (let step = 1; step <= steps; step++) {
-    await new Promise(resolve => setTimeout(resolve, 2000));  // 2s per step
-    const remaining = steps - step;
-    const progress = Math.floor((step / steps) * 100);
-
-
-    // FIXED: Publish progress with phase/shipment (for analyzer/manager)
-    device.publish(`harboursense/edge/${edgeId}/progress`, JSON.stringify({ 
-      id: edgeId, 
-      remaining, 
-      progress, 
-      phase: taskData.phase, 
-      shipmentId: taskData.shipmentId || edge.shipmentId,
-      currentLocation: edge.currentLocation 
-    }));
-
-
-    // Update DB location (simulate "processing" move, e.g., stay A1 for offload)
-    const mockNode = taskData.phase === 'offload' ? edge.currentLocation : (step % 2 === 0 ? 'processing' : edge.currentLocation);
-    await db.collection('edgeDevices').updateOne(
-      { id: edgeId },
-      { $set: { currentLocation: mockNode, updatedAt: new Date() } }
-    );
-    console.log(`[DEBUG EXECUTE] Edge ${edgeId} progress ${progress}% (step ${step}/${steps}): at ${mockNode}, remaining ${remaining}, shipment ${edge.shipmentId}`);
-  }
-
-
-  console.log(`[DEBUG EXECUTE] Task execution complete for ${edgeId} - chaining status update`);
-
-
-  // FIXED: Call chaining function at end (updates shipment, publishes, chains next)
-  await completeTaskAndChain(edgeId, taskData, device, db, edge);
-
-
-  console.log(`[DEBUG EXECUTE] Full execution and chain done for ${edgeId}`);
-}
-
-// FIXED: New function for completion chaining and status updates
-async function completeTaskAndChain(edgeId, taskData, device, db, edge) {
-  const { shipmentId, phase, finalNode } = taskData;
-  if (!shipmentId) {
-    console.warn(`[CHAIN] No shipmentId for ${edgeId} completion; skipping chain`);
-    return;
-  }
-
-  // Update edge to idle/completed
-  edge.taskPhase = TaskPhase.IDLE;
-  edge.shipmentId = null;
-  edge.assignedShipment = null;
-  edge.currentLocation = finalNode || edge.currentLocation;
-  edge.task = 'idle';
-  edge.path = [];
-  edge.remainingPath = [];
-  edge.nextNode = null;
-  edge.startNode = null;
-  edge.finalNode = null;
-  edge.eta = null;
-  edge.journeyTime = null;
-  await updateEdgeInDB(edge, db);  // Use existing update or db.collection('edgeDevices').updateOne
-
-  // Publish completion
-  const completionPayload = {
-    id: edgeId,
-    location: finalNode || edge.currentLocation,
-    phase: phase,
-    status: 'completed',
-    shipmentId: shipmentId,
-    completedAt: new Date().toISOString()
-  };
-  device.publish(`harboursense/edge/${edgeId}/completion`, JSON.stringify(completionPayload));
-  console.log(`[CHAIN] Published completion for ${edgeId}: ${JSON.stringify(completionPayload)}`);
-
-  // Backend owns shipment status transitions and follow-up assignment. The simulator
-  // only reports physical completion and leaves shipment mutation to manager.py.
-  console.log(`[CHAIN] Completion reported for ${shipmentId} (${phase}); backend will advance workflow`);
-}
-
-// Helper: Update edge in DB (inline for simplicity; expand if needed)
-async function updateEdgeInDB(edge, db) {
-  await db.collection('edgeDevices').updateOne(
-    { id: edge.id },
-    { 
-      $set: { 
-        taskPhase: edge.taskPhase,
-        shipmentId: edge.shipmentId,
-        assignedShipment: edge.assignedShipment,
-        currentLocation: edge.currentLocation,
-        task: edge.task,
-        path: edge.path,
-        remainingPath: edge.remainingPath,
-        nextNode: edge.nextNode,
-        startNode: edge.startNode,
-        finalNode: edge.finalNode,
-        eta: edge.eta,
-        journeyTime: edge.journeyTime,
-        updatedAt: new Date()
-      }
-    }
-  );
-  console.log(`[CHAIN] Updated edge ${edge.id} in DB: phase=${edge.taskPhase}, location=${edge.currentLocation}`);
-}
-
-
-// Simulate movement + more debug
-async function simulateMovement(edgeId, db, device) {
-  console.log(`[DEBUG SIM] Starting simulateMovement for ${edgeId}`);
-  let edge = await db.collection('edgeDevices').findOne({ id: edgeId });
-
-
-  if (!edge) {  // FIXED: Null check
-    console.log(`[DEBUG SIM] No edge found for ${edgeId} - skip`);
-    return;
-  }
-
-
-  console.log(`[DEBUG SIM] Edge ${edgeId} state: phase=${edge.taskPhase}, path=${JSON.stringify(edge.path)}, location=${edge.currentLocation}`);
-
-
-  const suggestion = suggestionsByEdge[edgeId] || {};
-
-
-  if (suggestion.suggestedPath && Array.isArray(suggestion.suggestedPath) && suggestion.suggestedPath.length > 0) {
-    const [suggestedStart] = suggestion.suggestedPath;
-    if (suggestedStart === edge.currentLocation) {
-      await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: suggestion.suggestedPath } });
-      console.log(`[DEBUG SIM] Applied path suggestion for ${edgeId}: ${suggestion.suggestedPath.join(' -> ')}`);
-      edge.path = suggestion.suggestedPath;
-    } else {
-      console.warn(`[DEBUG SIM] Ignored stale path suggestion for ${edgeId}: starts at ${suggestedStart}, current is ${edge.currentLocation}`);
-    }
-    delete suggestionsByEdge[edgeId];
-  }
-
-
-  if (!edge.path || edge.path.length === 0) {
-    console.log(`[DEBUG SIM] No path available for ${edgeId}; checking phases for shift...`);
-    return;
-  }
-
-
-  let currentLocation = edge.currentLocation;
-  let nextNode = edge.path[0];
-
-
-  if (currentLocation === nextNode) {
-    await updateEdgeState(db, edgeId, {
-      currentLocation: nextNode,
-      nextNode: nextNode,
-      taskPhase: TaskPhase.ASSIGNED
-    });
-
-
-    await db.collection('edgeDevices').updateOne(
-      { id: edgeId },
-      { $pull: { path: nextNode } }
-    );
-
-
-    console.log(`[DEBUG SIM] Already at ${nextNode}; discarding first path element and proceeding`);
-
-
-    edge = await db.collection('edgeDevices').findOne({ id: edgeId });
-
-
-    if (edge && edge.path.length === 0) {
-      if (edge.currentLocation === edge.finalNode) {
-        const updates = transitionToCompleting(edge);
-        await updateEdgeState(db, edgeId, updates);
-      } else if (edge.currentLocation === edge.startNode && edge.taskPhase === TaskPhase.EN_ROUTE_START) {
-        const updates = transitionToAssigned(edge);
-        await updateEdgeState(db, edgeId, updates);
-      }
-
-
-      device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify({
-        remainingPath: [],
-        currentLocation: nextNode,
-        taskPhase: edge.taskPhase
-      }));
-      console.log(`[DEBUG SIM] Path was already empty/short - shifted phase for ${edgeId}`);
-      return;
-    }
-
-
-    nextNode = edge.path[0];
-  }
-
-
-  const distance = nodeDistance(currentLocation, nextNode);
-  const speed = EDGE_SPEEDS[edge.type] || EDGE_SPEEDS.unknown;
-  const etaSeconds = Math.max(1, (distance * NODE_BASE_DISTANCE) / speed);
-
-
-  const suggestedEta = suggestion.eta ? parseFloat(suggestion.eta) : etaSeconds;
-  let journeyTime = (edge.journeyTime || 0) + suggestedEta;
-
-
-  console.log(`[DEBUG SIM] Edge ${edgeId} starting movement: ${currentLocation} -> ${nextNode} (distance: ${distance}, speed: ${speed}, ETA: ${suggestedEta}s)`);
-
-
-  const startTime = Date.now();
-  const updateInterval = simulatorSettings.simProgressIntervalMs;
-
-
-  let intervalId = setInterval(() => {
-    const elapsed = (Date.now() - startTime) / 1000;
-    const progress = Math.min(100, Math.floor((elapsed / suggestedEta) * 100));
-    const remaining = Math.max(0, Math.floor(suggestedEta - elapsed));
-
-
-    device.publish(`harboursense/edge/${edgeId}/progress`, JSON.stringify({
-      id: edgeId,
-      progress: progress,
-      remaining: remaining,
-      toNode: nextNode,
-      currentLocation: currentLocation
-    }));
-
-
-    console.log(`[DEBUG SIM] Edge ${edgeId} progress to ${nextNode}: ${progress}%, remaining: ${remaining}s`);
-
-
-    if (progress >= 100) {
-      clearInterval(intervalId);
-    }
-  }, updateInterval);
-
-
-  await new Promise(resolve => setTimeout(resolve, suggestedEta * 1000));
-  clearInterval(intervalId);
-
-
-  const arrivedNode = nextNode;
-  await updateEdgeState(db, edgeId, {
-    currentLocation: arrivedNode,
-    nextNode: arrivedNode,
-    taskPhase: TaskPhase.ASSIGNED
-  });
-
-
-  await db.collection('edgeDevices').updateOne(
-    { id: edgeId },
-    { $pull: { path: arrivedNode } }
-  );
-
-
-  console.log(`[DEBUG SIM] Pulled ${arrivedNode} from path for ${edgeId}`);
-
-
-  edge = await db.collection('edgeDevices').findOne({ id: edgeId });
-  const remainingPath = edge ? edge.path : [];
-
-
-  console.log(`[DEBUG SIM] After pull - remaining path for ${edgeId}: ${JSON.stringify(remainingPath)}, phase: ${edge.taskPhase}`);
-
-
-  // FIXED: If path empty after arrival in ASSIGNED, trigger completing + executeTask
-  if (remainingPath.length === 0 && edge) {
-    if (edge.taskPhase === TaskPhase.EN_ROUTE_START) {
-      const updates = transitionToAssigned(edge);
-      await updateEdgeState(db, edgeId, updates);
-    } else if (edge.taskPhase === TaskPhase.ASSIGNED) {
-      const updates = transitionToCompleting(edge);
-      await updateEdgeState(db, edgeId, updates);
-
-
-      // FIXED: Trigger executeTask immediately if no further movement (e.g., offload done)
-      const freshEdge = await db.collection('edgeDevices').findOne({ id: edgeId });
-      const taskData = typeof freshEdge.task === 'string' ? { phase: freshEdge.task } : (freshEdge.task || { phase: 'unknown' });
-      const steps = 1;  // Short for completion phase
-      await executeTask(edgeId, db, device, freshEdge, taskData, steps);  // Direct call for quick phases
-
-
-      console.log(`[DEBUG SIM] Path emptied after arrival at ${arrivedNode} for ${edgeId}; phase shifted and execution triggered.`);
-      return;  // Skip further since executed
-    }
-  } else {
-    console.log(`[DEBUG SIM] Path not empty after arrival at ${arrivedNode} for ${edgeId}; continuing loop.`);
-  }
-
-
-  const arrivalPayload = {
-    remainingPath: remainingPath,
-    currentLocation: arrivedNode,
-    taskPhase: edge ? edge.taskPhase : 'unknown',
-    finalNode: edge ? edge.finalNode : null,
-    status: 'arrived',
-    traveled: arrivedNode
-  };
-
-
-  device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify(arrivalPayload));
-  if (edge) {
-    await db.collection('edgeHistory').insertOne({ ...arrivalPayload, timestamp: new Date() });
-  }
-
-
-  console.log(`[DEBUG SIM] Edge ${edgeId} arrived at ${arrivedNode}, published remaining path (${remainingPath.length} nodes left)`);
-}
-
-
-async function edgeAutonomousLoop(edgeId, db, device) {
-  let moveCount = 0;
-  let pathEmptyCount = 0;
-  const MAX_EMPTY_LOGS = 3;
-
-
-  console.log(`[DEBUG LOOP] Starting autonomous loop for ${edgeId}`);
-
-
-  while (true) {
-    const edge = await db.collection('edgeDevices').findOne({ id: edgeId });
-
-
-    if (!edge) {  // FIXED: Null check
-      console.log(`[DEBUG LOOP] Edge ${edgeId} not found; skipping loop`);
-      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simEdgeMissingDelayMs));
-      continue;
-    }
-
-
-    const state = edge.taskPhase;
-    const pathLen = edge.path ? edge.path.length : 0;
-    const shipment = edge.shipmentId || 'null';
-
-
-    // FIXED: Log EVERY iteration for debug - shows if stuck
-    console.log(`[DEBUG LOOP] Edge ${edgeId} (type: ${edge.type}) - state: ${state}, path len: ${pathLen}, location: ${edge.currentLocation}, shipment: ${shipment}`);
-
-
-    if (state === TaskPhase.IDLE) {
-      console.log(`[DEBUG LOOP] Edge ${edgeId} idle - staying at ${edge.currentLocation}, awaiting task.`);
-      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simLoopIdleDelayMs));
-      if (edge.path && edge.path.length > 0) {
-        await simulateMovement(edgeId, db, device);
-        moveCount++;
-        pathEmptyCount = 0;
-
-
-        if (moveCount > 100) {
-         console.warn(`[DEBUG LOOP] Max moves reached for ${edgeId}; resetting to idle`);
-         const updates = transitionToIdle(edge);
-         await updateEdgeState(db, edgeId, updates);
-         break;
-        }
-      } else {
-        pathEmptyCount++;
-        if (pathEmptyCount <= MAX_EMPTY_LOGS) {
-         console.log(`[DEBUG LOOP] Path empty for ${edgeId} in ${state}; triggering phase shift...`);
-        } else if (pathEmptyCount === MAX_EMPTY_LOGS + 1) {
-         console.log(`[DEBUG LOOP] Further path empty logs for ${edgeId} suppressed.`);
-        }
-
-
-        // FIXED: Force shift and execute if empty in ASSIGNED (prevents stuck)
-        if (state === TaskPhase.EN_ROUTE_START) {
-          const updates = transitionToAssigned(edge);
-          await updateEdgeState(db, edgeId, updates);
-        } else if (state === TaskPhase.ASSIGNED) {
-          console.log(`[DEBUG LOOP] Forcing COMPLETING + execute for ${edgeId} (empty path in ASSIGNED)`);
-          const updates = transitionToCompleting(edge);
-          await updateEdgeState(db, edgeId, updates);
-
-
-          // FIXED: Direct executeTask here if not already called
-          const freshEdge = await db.collection('edgeDevices').findOne({ id: edgeId });
-          const taskData = typeof freshEdge.task === 'string' ? { phase: freshEdge.task } : (freshEdge.task || { phase: 'unknown' });
-          const steps = freshEdge.path ? freshEdge.path.length : 3;  // Default 3 if no path
-          await executeTask(edgeId, db, device, freshEdge, taskData, steps);
-
-
-          device.publish(`harboursense/traffic/update/${edgeId}`, JSON.stringify({
-            remainingPath: [],
-            currentLocation: edge.currentLocation,
-            taskPhase: state
-          }));
-        }
-      }
-    } else if (state === TaskPhase.COMPLETING) {
-      console.log(`[DEBUG LOOP] Edge ${edgeId} entering COMPLETING - calling executeTask`);
-      // FIXED: Fetch fresh edge/taskData for params
-      const freshEdge = await db.collection('edgeDevices').findOne({ id: edgeId });
-      if (!freshEdge || !freshEdge.task) {
-        console.warn(`[DEBUG LOOP] No task for completing ${edgeId}; resetting to IDLE`);
-        await updateEdgeState(db, edgeId, transitionToIdle(freshEdge || { id: edgeId }));
-        continue;
-      }
-      const taskData = typeof freshEdge.task === 'string' ? { phase: freshEdge.task } : (freshEdge.task || { phase: 'unknown' });
-      const steps = freshEdge.path ? freshEdge.path.length : 3;  // Dynamic: path len or default 3 for processing
-
-
-      await executeTask(edgeId, db, device, freshEdge, taskData, steps);
-      await new Promise(resolve => setTimeout(resolve, simulatorSettings.simCompletingDelayMs));
-    } else {
-      console.warn(`[DEBUG LOOP] Unknown state ${state} for ${edgeId} - forcing IDLE`);
-      await updateEdgeState(db, edgeId, transitionToIdle(edge));
-    }
-
-
-    await new Promise(resolve => setTimeout(resolve, simulatorSettings.simLoopTickMs));
-  }
-}
-
-
-async function publishCraneTelemetryPeriodically(db, device) {
+async function publishCraneTelemetryPeriodically(db) {
   console.log(
-    `Starting crane telemetry publisher (interval=${simulatorSettings.craneTelemetryIntervalMs}ms, topic=harboursense/telemetry/crane/{craneId}/raw)`
+    `Crane telemetry publisher interval=${simulatorSettings.craneTelemetryIntervalMs}ms`,
   );
 
   while (true) {
     try {
-      const cranes = await db.collection('edgeDevices').find({ type: 'crane' }).toArray();
+      const cranes = await runtimeCollection(db).find({ type: 'crane' }).toArray();
       for (const crane of cranes) {
         const payload = buildCraneTelemetryPayload(crane.id, {
           active: isCraneActive(crane.taskPhase),
         });
         const validation = validateCraneTelemetryPayload(payload);
         if (!validation.valid) {
-          console.warn(`Skipping invalid crane telemetry for ${crane.id}: missing ${validation.missing.join(', ')}`);
+          console.warn(`Skipping invalid crane telemetry for ${crane.id}`);
           continue;
         }
         device.publish(craneTelemetryTopic(crane.id), JSON.stringify(payload));
       }
-      if (cranes.length) {
-        console.log(`Published crane telemetry for ${cranes.length} crane(s)`);
-      }
     } catch (err) {
       console.error('Crane telemetry publish error:', err);
     }
-
     await new Promise((resolve) => setTimeout(resolve, simulatorSettings.craneTelemetryIntervalMs));
   }
 }
 
-
 async function runPortSimulation() {
   await client.connect();
-  console.log(`Connected to MongoDB database '${mongoSettings.databaseName}' from MONGO_URI`);
+  console.log(`Connected to MongoDB database '${mongoSettings.databaseName}'`);
   const db = client.db(mongoSettings.databaseName);
 
-  // FIXED: Ensure edgeDevices exist with idle defaults (as provided)
-  const edgesCount = await db.collection('edgeDevices').countDocuments();
+  const edgesCount = await runtimeCollection(db).countDocuments();
   if (edgesCount === 0) {
-    console.log('No edgeDevices found; inserting defaults...');
+    console.log('No edgeRuntime found; inserting defaults...');
     const defaultEdges = [
       { id: 'crane_1', type: 'crane', currentLocation: 'A1', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'crane_2', type: 'crane', currentLocation: 'A1', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'truck_tempo_1', type: 'truck_tempo', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'truck_tempo_2', type: 'truck_tempo', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'truck_delivery_1', type: 'truck_delivery', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'robot_1', type: 'robot', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
+      { id: 'robot001', type: 'robot', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'robot_2', type: 'robot', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
       { id: 'forklift_1', type: 'forklift', currentLocation: 'B4', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
-      { id: 'forklift_2', type: 'forklift', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS }
+      { id: 'forklift_2', type: 'forklift', currentLocation: 'D2', taskPhase: TaskPhase.IDLE, ...IDLE_DEFAULTS },
     ];
-    await db.collection('edgeDevices').insertMany(defaultEdges);
-    console.log('Inserted 9 default edges (cranes, tempo/delivery trucks, robots, forklifts).');
+    const runtimeDocs = [];
+    const assignmentDocs = [];
+    for (const edge of defaultEdges) {
+      const { runtime, assignment } = runtimeDocumentFromSeed(edge);
+      runtimeDocs.push(runtime);
+      assignmentDocs.push(assignment);
+    }
+    await runtimeCollection(db).insertMany(runtimeDocs);
+    await db.collection('edgeAssignments').insertMany(assignmentDocs);
+    console.log('Inserted 9 default edge runtime docs.');
   }
 
-  // NEW: Load port.graph for dynamic docks/warehouses
   const graphNodes = await db.collection('graph').find({}).toArray();
-  const docks = graphNodes.filter(node => node.type === 'dock').map(node => node.id);  // e.g., ['A1', 'A2']
-  const warehouses = graphNodes.filter(node => node.type === 'warehouse').map(node => node.id);
-  if (docks.length < 1) {
-    console.warn('No dock nodes in graph; falling back to A1');
-    docks.push('A1');
-  }
-  if (warehouses.length < 1) {
-    console.warn('No warehouses; falling back to C5');
-    warehouses.push('C5');
-  }
-  console.log(`Loaded graph: ${docks.length} docks (${docks.join(', ')}), ${warehouses.length} warehouses (${warehouses.join(', ')})`);
-  console.log(
-    `Simulator timing: shipmentIntervalsMs=${simulatorSettings.shipmentIntervalMsList.join(',')}, craneTelemetryIntervalMs=${simulatorSettings.craneTelemetryIntervalMs}, simLoopTickMs=${simulatorSettings.simLoopTickMs}`
-  );
+  const docks = graphNodes.filter((node) => node.type === 'dock').map((node) => node.id);
+  const warehouses = graphNodes.filter((node) => node.type === 'warehouse').map((node) => node.id);
+  if (docks.length < 1) docks.push('A1');
+  if (warehouses.length < 1) warehouses.push('C5');
+  console.log(`Graph: ${docks.length} docks, ${warehouses.length} warehouses`);
 
-  // Pass to generator
-  generateShipmentsPeriodically(db, docks, warehouses);
+  generateShipmentsPeriodically(db, docks, warehouses, device, simulatorSettings);
+
+  const loopOptions = {
+    suggestionsByEdge,
+    simulatorSettings,
+  };
 
   device.on('connect', async () => {
     console.log(`Connected to ${mqttBrokerLabel}`);
     const topics = [
       'harboursense/edge/+/task',
-      'harboursense/traffic/update/+',
-      'harboursense/shipments/+'
+      'harboursense/edge/+/route',
     ];
-
-    topics.forEach(topic => {
+    topics.forEach((topic) => {
       device.subscribe(topic);
       console.log(`Subscribed to ${topic}`);
     });
-    console.log('Subscribed to edge tasks, traffic updates, and shipments');
 
-    // Start edge loops
-    const edges = await db.collection('edgeDevices').find().toArray();
+    const edges = await runtimeCollection(db).find().toArray();
     if (edges.length) {
       console.log(`Starting simulation for ${edges.length} edges...`);
-      edges.forEach(edge => edgeAutonomousLoop(edge.id, db, device));
-    } else {
-      console.log('No edges found after insert check.');
+      edges.forEach((edge) => edgeAutonomousLoop(edge.id, db, device, loopOptions));
     }
 
-    publishCraneTelemetryPeriodically(db, device);
+    publishCraneTelemetryPeriodically(db);
   });
 
   device.on('error', (err) => console.error('MQTT error:', err));
-
-  device.on('message', async (topic, payload) => {
-    try {
-      console.log(`Message on topic: ${topic}`);
-
-      const taskMatch = topic.match(/^harboursense\/edge\/([^/]+)\/task$/);
-      const trafficMatch = topic.match(/^harboursense\/traffic\/update\/([^/]+)$/);
-      const shipmentMatch = topic.match(/^harboursense\/shipments\/(.+)$/);
-
-      // FIXED: Task handler wrapped in try/catch for error handling (as provided)
-      if (taskMatch) {
-        const edgeId = taskMatch[1];
-        const taskData = JSON.parse(payload.toString());
-        console.log(`Task received for edge ${edgeId}:`, taskData);
-
-        // FIXED: Fetch FRESH edge from DB to sync with manager's update (avoids race/local stale) (as provided)
-        let edge = await db.collection('edgeDevices').findOne({ id: edgeId });
-        if (!edge) {
-          console.warn(`No edge found for ${edgeId} in DB; skipping task assignment.`);
-          return;
-        }
-
-        console.log(`Fresh DB state for ${edgeId} on task: taskPhase='${edge.taskPhase}', shipmentId='${edge.shipmentId}', currentLocation='${edge.currentLocation}'`);
-
-        // FIXED: If not idle, but task matches (e.g., phase in edge.task), accept as race; else reset (as provided)
-        if (edge.taskPhase !== TaskPhase.IDLE) {
-          if (edge.task && edge.task.phase === taskData.phase && edge.shipmentId === taskData.shipmentId) {
-            console.warn(`Edge ${edgeId} already in '${edge.taskPhase}' for this task (race); proceeding to execute`);
-          } else {
-            console.warn(`Edge ${edgeId} not idle (was '${edge.taskPhase}'); forcing reset for new task`);
-            await db.collection('edgeDevices').updateOne(
-              { id: edgeId },
-              {
-                $set: { 
-                  taskPhase: TaskPhase.IDLE, 
-                  task: 'idle', 
-                  shipmentId: null, 
-                  path: [], 
-                  finalNode: null, 
-                  startNode: null, 
-                  updatedAt: new Date() 
-                }
-              }
-            );
-            edge = await db.collection('edgeDevices').findOne({ id: edgeId });  // Refetch
-            console.log(`Reset ${edgeId} to idle: ${JSON.stringify({taskPhase: edge.taskPhase, shipmentId: edge.shipmentId})}`);
-          }
-        }
-
-        // Merge taskData into any existing task object while normalizing legacy null strings.
-        const existingTask = (typeof edge.task === 'object' && edge.task !== null) ? edge.task : {};
-        const mergedTask = { ...existingTask, ...taskData };
-        if (isNullSentinel(edge.startNode)) edge.startNode = taskData.startNode || 'A1';
-        if (isNullSentinel(edge.shipmentId)) edge.shipmentId = taskData.shipmentId || null;
-
-        // FIXED: Update DB with merged state (en-route_start) (as provided)
-        const updates = {
-          taskPhase: TaskPhase.EN_ROUTE_START,
-          task: mergedTask,
-          shipmentId: edge.shipmentId,
-          path: taskData.path || [],
-          finalNode: taskData.finalNode,
-          startNode: edge.startNode,
-          nextNode: taskData.path?.[1] || taskData.destNode || null,
-          currentLocation: edge.currentLocation,
-          assignedShipment: taskData.shipmentId,  // Sync legacy field if used
-          updatedAt: new Date()
-        };
-        await updateEdgeState(db, edgeId, updates);  // Uses your updateEdgeState (logs changes)
-
-        console.log(`Edge ${edgeId} updated with new task and full path from manager: phase='${updates.taskPhase}', path=${updates.path?.join(' -> ')}, shipmentId='${updates.shipmentId}'`);
-
-        // FIXED: No direct transition call—autonomous loop will detect 'en_route_start' + path and start simulateMovement
-        // If path empty/short (e.g., offload at A1), loop shifts to completing → executeTask
-
-      } else if (trafficMatch) {
-        const edgeId = trafficMatch[1];
-        const trafficData = JSON.parse(payload.toString());
-
-        if (trafficData.path || trafficData.suggestedPath || trafficData.eta) {
-          suggestionsByEdge[edgeId] = {
-            ...suggestionsByEdge[edgeId],
-            path: trafficData.path || trafficData.suggestedPath,
-            eta: trafficData.eta,
-            suggestedPath: trafficData.suggestedPath || trafficData.path
-          };
-          console.log(`Cached MQTT traffic data for ${edgeId}: path=${(trafficData.path || []).join(' -> ')}, eta=${trafficData.eta}`);
-
-          if (trafficData.path && Array.isArray(trafficData.path)) {
-            await db.collection('edgeDevices').updateOne({ id: edgeId }, { $set: { path: trafficData.path } });
-            console.log(`Updated path for ${edgeId} from MQTT: ${trafficData.path.join(' -> ')}`);
-          }
-        }
-      } else if (shipmentMatch) {
-        const shipmentId = shipmentMatch[1];
-        const shipmentData = JSON.parse(payload.toString());
-        console.log(`Shipment update ${shipmentId}:`, shipmentData);
-
-        const shipmentUpdates = {
-          updatedAt: new Date()
-        };
-        if (shipmentData.status) shipmentUpdates.status = shipmentData.status;
-        if (shipmentData.currentNode) shipmentUpdates.currentNode = shipmentData.currentNode;
-        if (shipmentData.destination) shipmentUpdates.destination = shipmentData.destination;
-        if (shipmentData.warehouseAssigned) shipmentUpdates.warehouseAssigned = shipmentData.warehouseAssigned;
-        if (Array.isArray(shipmentData.assignedEdges)) shipmentUpdates.assignedEdges = shipmentData.assignedEdges;
-
-        await db.collection('shipments').updateOne(
-          { id: shipmentId },
-          { $set: shipmentUpdates },
-          { upsert: true }
-        );
-
-        console.log(`Updated shipment ${shipmentId} to node ${shipmentData.currentNode}, status ${shipmentData.status}`);
-        return;
-      }
-    } catch (err) {
-      console.error('Error processing message:', err);
-    }
-  });
-
-  // FIXED: Publish to manager's expected topic (as provided, but moved generate call up)
+  device.on('message', createMqttMessageHandler(db, device, suggestionsByEdge));
 }
-
-// UPDATED: Dynamic shipment generator using graph + random interval
-async function generateShipmentsPeriodically(db, docks, warehouses) {
-  const shipmentsColl = db.collection('shipments');
-  let shipmentCounter = await shipmentsColl.countDocuments();  // Resume counter from DB
-
-  console.log(`Starting dynamic shipment gen: docks=${docks.join(', ')}, warehouses=${warehouses.join(', ')}`);
-
-  while (true) {
-    shipmentCounter++;
-    const randomDock = docks[Math.floor(Math.random() * docks.length)];  // e.g., 'A1' or 'A2'
-    const randomWarehouse = warehouses[Math.floor(Math.random() * warehouses.length)];  // e.g., 'B4'
-
-    const newShipment = {
-      id: `shipment_${shipmentCounter}`,
-      arrivalNode: randomDock,
-      currentNode: randomDock,  // Start at random dock
-      status: 'arrived',  // Ready for immediate crane offload at dock
-      destination: randomWarehouse,  // Random storage target
-      assignedEdges: [],
-      createdAt: new Date()
-    };
-
-    await shipmentsColl.insertOne(newShipment);
-
-    // FIXED: Publish to per-ID topic (manager subscribes to shipments/+)
-    device.publish(`harboursense/shipments/${newShipment.id}`, JSON.stringify(newShipment));
-
-    console.log(`New arrived shipment: ${newShipment.id} at ${randomDock} (dest: ${randomWarehouse}, ready for offload)`);
-
-    const randomInterval = pickShipmentIntervalMs(simulatorSettings.shipmentIntervalMsList);
-    console.log(`Next shipment in ${randomInterval / 1000}s...`);
-
-    await new Promise(resolve => setTimeout(resolve, randomInterval));
-  }
-}
-
 
 runPortSimulation().catch(console.error);
+
+}

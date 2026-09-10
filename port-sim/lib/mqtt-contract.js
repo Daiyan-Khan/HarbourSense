@@ -24,6 +24,10 @@ function taskTopic(edgeId) {
   return edgeTopic(edgeId, 'task');
 }
 
+function routeTopic(edgeId) {
+  return edgeTopic(edgeId, 'route');
+}
+
 function progressTopic(edgeId) {
   return edgeTopic(edgeId, 'progress');
 }
@@ -112,6 +116,7 @@ module.exports = {
   REQUIRED_CRANE_TELEMETRY_FIELDS,
   completionTopic,
   taskTopic,
+  routeTopic,
   progressTopic,
   trafficUpdateTopic,
   shipmentTopic,

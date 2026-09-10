@@ -1,0 +1,72 @@
+name: Publish portfolio demo
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+        working-directory: dashboard/visualizer
+      - run: npm run check:secrets
+      - run: npm run test:tooling
+      - run: node node_modules/react-scripts/scripts/test.js --watchAll=false --runInBand
+        working-directory: dashboard/visualizer
+        env: { CI: 'true' }
+      - run: npm run demo:build
+        env: { DEMO_BASE_PATH: '/HarbourSense' }
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dashboard/visualizer/build }
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy validated static demo
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  verify-public:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Check deployed revision
+        env:
+          DEMO_PUBLIC_URL: ${{ needs.deploy.outputs.page_url }}
+        run: node scripts/check-public-demo.mjs
+      - name: Exercise published scenarios from an independent Linux runner
+        run: npm run test:e2e
+        env:
+          DEMO_E2E_URL: ${{ needs.deploy.outputs.page_url }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: public-browser-report, path: 'playwright-report/', retention-days: 14 }

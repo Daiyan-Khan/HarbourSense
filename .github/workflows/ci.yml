@@ -2,143 +2,122 @@ name: HarbourSense CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, 'codex/**']
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  backend-tests:
+  tooling-and-simulator:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install backend dependencies
-        run: python -m pip install -r python-backend/requirements.txt
-      - name: Python compile check
-        run: python -m py_compile python-backend/*.py python-backend/tests/test_*.py
-      - name: Backend unit tests
-        run: python -m unittest discover -s python-backend/tests -p "test_*.py"
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm run test:tooling
+      - run: npm run check:secrets
+      - run: npm ci --no-audit --no-fund
+        working-directory: port-sim
+      - run: npm test
+        working-directory: port-sim
+      - run: docker compose --env-file config/demo.env -f compose.demo.yml config --quiet
 
-  port-sim-tests:
+  backend:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install port-sim dependencies
-        run: npm ci
-        working-directory: port-sim
-      - name: Port-sim syntax check
-        run: node --check port.js
-        working-directory: port-sim
-      - name: Port-sim contract tests
-        run: npm test
-        working-directory: port-sim
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: { python-version: '3.12' }
+      - run: python -m pip install -r python-backend/requirements.txt
+      - run: python -m unittest discover -s python-backend/tests -p 'test_*.py'
 
-  dashboard-tests:
+  analyzer-and-evaluation:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard/visualizer
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install dashboard dependencies
-        run: npm ci
-      - name: Dashboard unit tests
-        run: npm test -- --watchAll=false
-      - name: Dashboard production build
-        run: npm run build
-
-  edge-analyzer-tests:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: { python-version: '3.12' }
+      - run: python -m pip install -r evaluation/requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_*.py'
         working-directory: edge-analyzer
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install edge-analyzer dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Edge analyzer unit tests
-        run: python -m unittest discover -s tests -p "test_*.py"
+      - run: python -m unittest discover -s evaluation -p 'test_*.py'
+      - run: python evaluation/verify.py
 
-  compose-config:
+  dashboard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Validate docker compose config
-        run: docker compose config --services
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24', cache: npm, cache-dependency-path: dashboard/visualizer/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+        working-directory: dashboard/visualizer
+      - run: node node_modules/react-scripts/scripts/test.js --watchAll=false --runInBand
+        working-directory: dashboard/visualizer
+        env: { CI: 'true' }
+      - run: npm run demo:build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: replay-browser-report, path: 'playwright-report/', retention-days: 7 }
 
-  docker-build:
+  mqtt-contracts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Build service images
-        run: |
-          docker compose build backend portsim dashboard edge-analyzer mongo-seed
-      - name: Verify built images exist
-        run: docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'harboursense|edge-analyzer|backend|portsim|dashboard|mongo-seed' || true
-
-  secret-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Fail on MongoDB Atlas SRV literals in source
-        run: |
-          if grep -RIn "mongodb+srv://" --exclude-dir=.git .; then
-            echo "Found mongodb+srv literals"
-            exit 1
-          fi
-      - name: Fail on AWS IoT host literals in source
-        run: |
-          if grep -RInE "\\.iot\\.[^./]+\\.amazonaws\\.com" --exclude-dir=.git .; then
-            echo "Found AWS IoT host literals"
-            exit 1
-          fi
-
-  mqtt-broker-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install port-sim dependencies
-        run: npm ci
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24' }
+      - run: npm ci --no-audit --no-fund
         working-directory: port-sim
-      - name: Start local Mosquitto broker
-        run: docker compose up -d mqtt
-      - name: Wait for Mosquitto port
+      - name: Start isolated contract broker
         run: |
-          for i in $(seq 1 30); do
-            if nc -z localhost 1883; then
-              echo "Mosquitto is listening on 1883"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Mosquitto did not become ready in time"
-          docker compose logs mqtt || true
+          docker run -d --name contract-mqtt -p 127.0.0.1:1883:1883 -v "$PWD/mosquitto/conf/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2
+          for attempt in $(seq 1 30); do nc -z 127.0.0.1 1883 && exit 0; sleep 1; done
           exit 1
-      - name: Broker contract smoke script
-        run: node scripts/smoke-mqtt-broker.mjs --broker mqtt://localhost:1883
-      - name: Port-sim broker integration test
-        run: npm run test:mqtt-broker
+      - run: node scripts/smoke-mqtt-broker.mjs --broker mqtt://127.0.0.1:1883
+      - run: npm run test:mqtt-broker
         working-directory: port-sim
-        env:
-          MQTT_BROKER_SMOKE: "1"
-          MQTT_BROKER_HOST: localhost
-          MQTT_BROKER_PORT: "1883"
+        env: { MQTT_BROKER_SMOKE: '1', MQTT_BROKER_HOST: '127.0.0.1', MQTT_BROKER_PORT: '1883' }
+      - run: docker logs contract-mqtt
+        if: failure()
+      - run: docker stop contract-mqtt
+        if: always()
+
+  fresh-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: { node-version: '24', cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run demo
+      - run: node scripts/smoke-local.mjs --base-url http://127.0.0.1:8000
+      - run: node scripts/test-demo-integration.mjs --faults
+        env: { DEMO_TEST_ALLOW_RESET: '1' }
+      - run: npm run test:e2e
+        env: { DEMO_E2E_MODE: live, DEMO_TEST_ALLOW_RESET: '1' }
+      - name: Collect service logs
+        if: always()
+        run: |
+          mkdir -p artifacts/local
+          docker compose --env-file config/demo.env -f compose.demo.yml logs --no-color --tail 300 > artifacts/local/compose.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-stack-evidence
+          path: |
+            artifacts/local/
+            playwright-report/
+            test-results/
+          retention-days: 7
+      - run: npm run demo:stop
+        if: always()

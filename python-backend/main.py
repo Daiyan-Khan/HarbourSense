@@ -1,14 +1,27 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from datetime import datetime, timedelta
 from sklearn.ensemble import IsolationForest
 import numpy as np
 from bson import ObjectId  # Import this for type checking
 import math
 from backend_config import MongoConfigError, get_mongo_database, get_mongo_settings
+from port_state import build_port_state_snapshot
+from edge_view import load_merged_edges
+from edge_stream import sse_event_generator, start_edge_stream_hub, stop_edge_stream_hub, subscribe
 
+
+from demo_runtime import demo_enabled
+from demo_service import DemoService, DemoCommandError
+
+demo_service = None
+
+async def request_database():
+    return await demo_service.database() if demo_service else db
 
 logger = logging.getLogger(__name__)
 MONGO_RUNTIME_ERROR_NAMES = {
@@ -107,14 +120,41 @@ def sanitize_for_json(data):
         return None # Convert NaN to null (None in Python)
     else:
         return data
-app = FastAPI()
+
+# MongoDB connection follows the Compose/.env contract.
+try:
+    mongo_settings = get_mongo_settings()
+    db = get_mongo_database(mongo_settings)
+except MongoConfigError as exc:
+    raise RuntimeError(f"Invalid MongoDB configuration for FastAPI startup: {exc}") from None
+
+
+@asynccontextmanager
+async def app_lifespan(_app):
+    global demo_service
+    if demo_enabled():
+        demo_service = DemoService(db, mongo_settings)
+        await demo_service.initialize()
+    else:
+        await start_edge_stream_hub(db)
+    try:
+        yield
+    finally:
+        if demo_service:
+            await demo_service.close()
+        else:
+            await stop_edge_stream_hub()
+
+
+app = FastAPI(lifespan=app_lifespan)
 
 # CORS setup to allow frontend requests
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "*"  # Optional for testing; remove in production
-]
+import os
+origins = [origin.strip() for origin in os.environ.get(
+    'FRONTEND_ORIGINS',
+    'http://localhost:3000,http://127.0.0.1:3000,http://localhost:3003,http://127.0.0.1:3003'
+).split(',') if origin.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,12 +164,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# MongoDB connection follows the Compose/.env contract.
-try:
-    mongo_settings = get_mongo_settings()
-    db = get_mongo_database(mongo_settings)
-except MongoConfigError as exc:
-    raise RuntimeError(f"Invalid MongoDB configuration for FastAPI startup: {exc}") from None
 # Health check endpoint
 @app.get("/")
 async def read_root():
@@ -143,6 +177,7 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
+    db = await request_database()
     operation = "readiness"
     try:
         await db.command("ping")
@@ -164,6 +199,9 @@ async def health_ready():
 
 @app.get('/analyze_sensors')
 async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
+    if demo_service:
+        raise HTTPException(status_code=403, detail={'code': 'demo_worker_owned', 'message': 'Demo sensor analysis is performed by the managed worker.'})
+    db = await request_database()
     operation = "sensor analysis"
     try:
         query = {} if sensor_type == 'all' else {'type': sensor_type}
@@ -198,12 +236,36 @@ async def analyze_sensors(sensor_type: str = 'all', window_mins: int = 30):
             raise_database_unavailable(operation, exc)
         raise_internal_api_error(operation, exc)
 
+
+@app.get("/api/edges/stream")
+async def stream_edges():
+    if demo_service:
+        return StreamingResponse(demo_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    operation = "edge device stream"
+    try:
+        queue = subscribe()
+        return StreamingResponse(
+            sse_event_generator(db, queue),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except Exception as exc:
+        if is_mongo_runtime_error(exc):
+            raise_database_unavailable(operation, exc)
+        raise_internal_api_error(operation, exc)
+
+
 @app.get("/api/edges")
 async def get_edges():
+    db = await request_database()
     operation = "edge devices"
     try:
         # 1. Fetch the raw data from MongoDB
-        edges = [doc async for doc in db.edgeDevices.find()]
+        edges = await load_merged_edges(db)
         
         # 2. Fix the MongoDB ObjectIDs
         fixed_edges = fix_mongo_ids(edges)
@@ -221,6 +283,7 @@ async def get_edges():
 
 @app.get("/api/sensors")
 async def get_sensors():
+    db = await request_database()
     operation = "sensor readings"
     try:
         sensors = [doc async for doc in db.sensorData.find().sort("timestamp", -1).limit(100)]  # Latest sensors
@@ -233,6 +296,7 @@ async def get_sensors():
 
 @app.get("/api/shipments")
 async def get_shipments(limit: int = 50):
+    db = await request_database()
     operation = "shipments"
     bounded_limit = max(1, min(limit, 200))
     try:
@@ -245,8 +309,22 @@ async def get_shipments(limit: int = 50):
         raise_internal_api_error(operation, exc)
 
 
+@app.get("/api/port-state")
+async def get_port_state():
+    db = await request_database()
+    operation = "port state"
+    try:
+        snapshot = await build_port_state_snapshot(db)
+        return sanitize_for_json(fix_mongo_ids(snapshot))
+    except Exception as exc:
+        if is_mongo_runtime_error(exc):
+            raise_database_unavailable(operation, exc)
+        raise_internal_api_error(operation, exc)
+
+
 @app.get("/api/alerts/sensor")
 async def get_sensor_alerts(limit: int = 50, unresolved_only: bool = True):
+    db = await request_database()
     operation = "sensor alerts"
     bounded_limit = max(1, min(limit, 200))
     query = {"resolved": False} if unresolved_only else {}
@@ -262,6 +340,7 @@ async def get_sensor_alerts(limit: int = 50, unresolved_only: bool = True):
 
 @app.get("/api/alerts/maintenance")
 async def get_maintenance_alerts(limit: int = 50, unresolved_only: bool = True):
+    db = await request_database()
     operation = "maintenance alerts"
     bounded_limit = max(1, min(limit, 200))
     query = {"resolved": False} if unresolved_only else {}
@@ -276,6 +355,7 @@ async def get_maintenance_alerts(limit: int = 50, unresolved_only: bool = True):
 
 @app.get("/api/graph")
 async def get_graph():
+    db = await request_database()
     operation = "graph nodes"
     try:
         cursor = db.graph.find()  # Fetch all node documents
@@ -295,3 +375,58 @@ async def get_graph():
             raise_database_unavailable(operation, exc)
         raise_internal_api_error(operation, exc)
 
+
+async def demo_stream():
+    import asyncio
+    import json
+    from demo_service import clean
+    while True:
+        try:
+            current_db = await demo_service.database()
+            state = await demo_service.state()
+            yield "data: " + json.dumps({"type": "snapshot", "edges": clean(await load_merged_edges(current_db)), "runId": state["runId"], "demo": state}) + "\n\n"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            yield ": database temporarily unavailable\n\n"
+        await asyncio.sleep(.5)
+
+
+@app.get("/api/demo/state")
+async def get_demo_state():
+    if not demo_service:
+        return {"schemaVersion": 1, "enabled": False, "mode": "live", "status": "disabled", "scenarios": [], "services": {}}
+    return await demo_service.state()
+
+
+@app.post("/api/demo/{action}")
+async def demo_command(action: str, payload: dict):
+    if not demo_service:
+        raise HTTPException(status_code=403, detail={"code": "demo_disabled", "message": "Controls require the isolated local demo."})
+    try:
+        return await demo_service.command(action, payload)
+    except DemoCommandError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from None
+
+
+@app.get("/api/demo/recording")
+async def get_demo_recording(runId: str | None = None):
+    if not demo_service:
+        raise HTTPException(status_code=403, detail={"code": "demo_disabled"})
+    try:
+        return await demo_service.recording(runId)
+    except DemoCommandError as exc:
+        raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from None
+
+
+@app.get("/api/telemetry/cranes")
+async def get_crane_telemetry():
+    from demo_service import clean
+    current_db = await request_database()
+    return clean(await current_db.craneTelemetry.find({}).sort("timestamp", -1).limit(100).to_list(None))
+
+@app.get("/api/maintenance/tasks")
+async def get_maintenance_tasks():
+    from demo_service import clean
+    current_db = await request_database()
+    return clean(await current_db.maintenanceTasks.find({}).sort("createdAt", -1).limit(100).to_list(None))

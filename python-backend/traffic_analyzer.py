@@ -1,4 +1,5 @@
 import logging
+import sys
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -12,6 +13,7 @@ from math import inf  # For infinite distances (float('inf') alternative)
 from motor.motor_asyncio import AsyncIOMotorClient  # If needed for DB in analyzer
 from pymongo.operations import UpdateOne  # FIXED: Correct import for bulk ops
 from mqtt_config import build_aiomqtt_params, get_mqtt_settings
+from edge_view import load_merged_edges
 def convert_bson_numbers(obj):
     """
     Recursively converts BSON types (e.g., ObjectId to str, Int64 to int) for JSON serialization.
@@ -33,6 +35,14 @@ def convert_bson_numbers(obj):
 import string  # For node_to_coords
 
 logger = logging.getLogger("TrafficAnalyzer")  # Consistent with your setup
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    console_handler = logging.StreamHandler(stream=sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    logger.addHandler(console_handler)
 
 def node_to_coords(node):  # Add if missing
     if len(node) < 2:
@@ -50,6 +60,66 @@ NULL_NODE_SENTINELS = {None, "Null", "null", "None", "undefined", ""}
 
 def is_missing_node(value):
     return value in NULL_NODE_SENTINELS
+
+
+def normalize_node_id(value):
+    """Normalize node IDs: strip hyphens, reject null sentinels."""
+    if is_missing_node(value):
+        return None
+    return str(value).strip().replace("->", "-").replace("-", "")
+
+
+def _neighbor_ids(planner_or_graph, node):
+    """Return adjacent node IDs for a graph node."""
+    if planner_or_graph is None:
+        return []
+    if hasattr(planner_or_graph, "get_neighbors"):
+        return [normalize_node_id(neighbor) for neighbor, _ in planner_or_graph.get_neighbors(node)]
+    node_data = planner_or_graph.get(node, {}) if isinstance(planner_or_graph, dict) else {}
+    neighbors = node_data.get("neighbors", {}) if isinstance(node_data, dict) else {}
+    ids = []
+    for _, neighbor in neighbors.items():
+        normalized = normalize_node_id(neighbor)
+        if normalized:
+            ids.append(normalized)
+    return ids
+
+
+def validate_path_adjacency(path, planner_or_graph):
+    """Ensure each consecutive path pair is a graph neighbor; return path or None."""
+    if not path or not isinstance(path, list):
+        return None
+    if len(path) < 2:
+        return [normalize_node_id(path[0])] if normalize_node_id(path[0]) else None
+
+    normalized_path = []
+    for node in path:
+        normalized = normalize_node_id(node)
+        if not normalized:
+            return None
+        normalized_path.append(normalized)
+
+    for idx in range(len(normalized_path) - 1):
+        current = normalized_path[idx]
+        nxt = normalized_path[idx + 1]
+        if nxt not in _neighbor_ids(planner_or_graph, current):
+            logger.warning(f"Non-adjacent hop in path: {current} -> {nxt}")
+            return None
+    return normalized_path
+
+
+def trim_path_from_current(path, current_location):
+    """Trim path so it starts at current_location when possible."""
+    current = normalize_node_id(current_location)
+    if not path or not current:
+        return path
+    normalized = [normalize_node_id(node) for node in path]
+    if not normalized or normalized[0] == current:
+        return path
+    if current in normalized:
+        start_idx = normalized.index(current)
+        return path[start_idx:]
+    return None
 
 # Parse graph list into dict format (fallback if DB empty)
 def parse_graph(graph_list):
@@ -155,6 +225,16 @@ class SmartRoutePlanner:
             logger.warning(f"Invalid float {val}; using {default}")
             return default
 
+    def safe_float_recursive(self, val, default=0.0, context=""):
+        """Recursive-safe float helper used by manager reroute checks."""
+        if isinstance(val, dict):
+            for key in ("value", "ratio", "load"):
+                if key in val:
+                    return self.safe_float_recursive(val[key], default, context)
+            logger.warning(f"Nested dict in {context or 'loads'}: {val}; using default {default}")
+            return default
+        return self.safe_float(val, default)
+
     def compute_path(self, start, end, node_loads, route_congestion, capacity_threshold=0.8, predicted_loads=None):
         if predicted_loads is None:
             predicted_loads = {}
@@ -218,6 +298,44 @@ class SmartRoutePlanner:
             logger.warning(f"No path {start} -> {end}; try greedy fallback")
             return self._greedy_fallback(start, end, node_loads, route_congestion, capacity_threshold, predicted_loads)
 
+    def _bfs_shortest_path(self, start, end):
+        """Plain BFS without congestion weighting."""
+        start = normalize_node_id(start)
+        end = normalize_node_id(end)
+        if not start or not end:
+            return None
+        if start == end:
+            return [start]
+        nodes = list(self.flat_graph.keys()) if isinstance(self.flat_graph, dict) else []
+        if not nodes or start not in nodes or end not in nodes:
+            return None
+
+        previous = {node: None for node in nodes}
+        queue = [start]
+        visited = {start}
+        while queue:
+            current = queue.pop(0)
+            if current == end:
+                break
+            for neighbor, _ in self.get_neighbors(current):
+                neighbor = normalize_node_id(neighbor)
+                if not neighbor or neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                previous[neighbor] = current
+                queue.append(neighbor)
+
+        if previous.get(end) is None and end != start:
+            return None
+
+        path = []
+        current = end
+        while current is not None:
+            path.append(current)
+            current = previous.get(current)
+        path.reverse()
+        return path if path and path[0] == start else None
+
     def _greedy_fallback(self, start, end, node_loads, route_congestion, capacity_threshold=0.8, predicted_loads=None):
         if predicted_loads is None:
             predicted_loads = {}
@@ -254,7 +372,20 @@ class SmartRoutePlanner:
             current = next_node
             steps += 1
         logger.info(f"Greedy path {start} -> {end}: {path}")
-        return path if path[-1] == end else [start, end]  # Ultimate fallback
+        if path and path[-1] == end:
+            validated = validate_path_adjacency(path, self)
+            if validated:
+                return validated
+
+        bfs_path = self._bfs_shortest_path(start, end)
+        if bfs_path:
+            validated = validate_path_adjacency(bfs_path, self)
+            if validated:
+                logger.info(f"Unweighted BFS fallback {start} -> {end}: {validated}")
+                return validated
+
+        logger.warning(f"No valid adjacent path {start} -> {end}; skipping teleport fallback")
+        return None
 
 class TrafficAnalyzer:
     def __init__(self, db, mqtt_client=None, graph=None):  # mqtt_client is pre-connected AsyncMQTTClient
@@ -314,14 +445,14 @@ class TrafficAnalyzer:
             anomaly_type = alert.get("alert_type", "")
             if anomaly_type in ["vibration_spike", "occupancy_high"] and node:  # Core repair triggers
                 penalty = 20 if severity == "high" else 10  # Boost predicted load (simulates repair tasks)
-                alert_penalties[node] = alert_penalties.get(node, 0) + penalty
+                alert_penalties[node] = max(alert_penalties.get(node, 0), penalty)
                 logger.debug(f"Applied sensor penalty {penalty} to predicted load for {node} (alert: {anomaly_type}, severity: {severity})")
 
         # Define blocked nodes (e.g., docks, non-route points) - adapt based on your graph
         blocked_nodes = ["C3", "dockA1", "loadingzone"]  # Example: block specific docks or areas
 
         # Fetch edges (now including posted ETA, journeyTime, finalNode for predictions)
-        edges = [doc async for doc in self.db.edgeDevices.find()]  # Assuming edgeDevices collection
+        edges = await load_merged_edges(self.db)
 
         route_load = {}
         node_loads = {}
@@ -329,7 +460,7 @@ class TrafficAnalyzer:
         # FIXED: Optional wh filter (boost only if node is warehouse; add your wh list)
         warehouses = ['B4', 'D2', 'E5']  # Known wh nodes
         for node, penalty in alert_penalties.items():
-            if node in warehouses:  # Wh-specific boost (avoids noise on docks)
+            if node in graph:  # Congested road nodes affect routing as well as warehouses.
                 predicted_loads[node] += penalty
                 logger.debug(f"Wh-specific penalty {penalty} for {node}")
 
@@ -339,8 +470,10 @@ class TrafficAnalyzer:
                 logger.warning("Skipping invalid edge document")
                 continue
 
-            # Idle-only check per workflow; skip if not idle
-            if edge.get('taskPhase') != "idle" or edge.get('task') == "idle":
+            # Traffic load comes from devices moving along an active route.
+            if edge.get('taskPhase') in ("idle", "completing"):
+                continue
+            if not edge.get("nextNode"):
                 logger.debug(f"Skipping non-idle edge {edge.get('id')}: task={edge.get('task')}, phase={edge.get('taskPhase')}")
                 continue
 
@@ -403,7 +536,6 @@ class TrafficAnalyzer:
         # Optional: Generate suggestions and update edges (idle-only, like before)
         suggestions = []
         route_planner = SmartRoutePlanner(graph, blocked_nodes)
-        bulk_ops = []
         for edge in edges:
             if not edge or not isinstance(edge, dict) or edge.get('taskPhase') != "idle" or edge.get('task') == "idle":
                 continue  # Idle-only
@@ -457,11 +589,7 @@ class TrafficAnalyzer:
                 best_node = suggested_path[1]
                 best_eta = sum(1 for i in range(len(suggested_path) - 1)) / edge.get('speed', 10)  # Simple unit weight ETA
 
-            # Ultimate fallback
-            next_node_val = best_node if best_node is not None else None
-            eta_val = best_eta if best_eta != "NA" else "NA"
-            bulk_ops.append(UpdateOne({"id": edge["id"]}, {"$set": {"nextNode": next_node_val, "eta": eta_val, "suggestedPath": suggested_path}}))  # FIXED: Use UpdateOne directly
-
+            # Suggestions stored in trafficData only — do not write edgeDevices transit fields.
             route_key = f"{current_node}-{best_node}"
             suggestions.append({
                 "edgeId": edge["id"],
@@ -473,14 +601,6 @@ class TrafficAnalyzer:
                 "congestionLevel": route_congestion.get(route_key, {"level": "low"})["level"],
                 "nodeCongestionAtNext": node_congestion.get(best_node, {"level": "low"})["level"]
             })  # Append suggestion with traffic insights
-
-        # Execute bulk updates if any (optional; comment out if not needed during analysis)
-        if bulk_ops:
-            try:
-                result = await self.db.edgeDevices.bulk_write(bulk_ops)
-                logger.debug(f"Bulk update: {result.modified_count} edges updated")
-            except Exception as e:
-                logger.error(f"Bulk update failed: {e}")
 
         # Store results in DB
         await self.db.trafficData.insert_one({
@@ -511,82 +631,31 @@ class TrafficAnalyzer:
         return loads  # Full dict if no node
 
     async def start_mqtt_listener(self):
-        """Clean MQTT listener: Subscribe to path updates, trigger analysis/reroutes."""
-        await self._ensure_connected()  # Ensure initial connection (your TLS/client setup)
-        subscribe_topic = 'harboursense/traffic/update/#'  # Wildcard for all edge updates (e.g., /update/truck_1)
+        """Metrics-only listener: traffic/update arrivals trigger analysis; reroutes handled by manager."""
+        await self._ensure_connected()
+        subscribe_topic = 'harboursense/traffic/update/#'
         await self.mqtt_client.subscribe(subscribe_topic)
-        logger.info(f"MQTT listener started on {subscribe_topic}")
+        logger.info(f"TrafficAnalyzer metrics listener started on {subscribe_topic}")
 
         async for message in self.mqtt_client.messages:
             try:
-                # FIXED: Proper aiomqtt handling - topic as str, payload decode
-                topic_str = str(message.topic)  # Topic is 'Topic' object → str (e.g., "harboursense/traffic/update/agv001")
-                payload_bytes = message.payload  # Bytes
-                payload_str = payload_bytes.decode('utf-8', errors='ignore')  # Handle any encoding issues
-                payload = json.loads(payload_str)  # Parse JSON
-                logger.debug(f"Analyzer MQTT: Topic={topic_str}, Payload sample={payload_str[:100]}...")
-
-                # Extract edge_id from topic (e.g., /update/agv001 → agv001)
+                topic_str = str(message.topic)
+                payload_str = message.payload.decode('utf-8', errors='ignore')
+                payload = json.loads(payload_str)
                 topic_parts = topic_str.split('/')
                 edge_id = topic_parts[-1] if len(topic_parts) > 0 else 'unknown'
-                logger.info(f"Received path update from {edge_id}: remainingPath={payload.get('remainingPath', [])}")
-
-                # Always trigger full analysis on any update (metrics, loads, etc.)
-                await self.analyze_metrics(triggered_by=f"Path update from {edge_id}")
-
-                # Reroute only if path short (e.g., <3 nodes, near end/congestion change)
-                remaining_path = payload.get('remainingPath', [])
-                if len(remaining_path) < 3:
-                    start = payload.get('currentLocation', 'A1')
-                    
-                    # Fetch dynamic finalNode from DB (scrub Nulls/invalids)
-                    edge_doc = await self.db.edgeDevices.find_one({'id': edge_id})
-                    if edge_doc:
-                        destination_raw = edge_doc.get('finalNode') or edge_doc.get('destinationNode', 'C5')
-                        # FIXED: Scrub Null/None variants
-                        if is_missing_node(destination_raw):
-                            destination = 'C5'
-                            logger.debug(f"Scrubbed invalid destination for {edge_id}; fallback to {destination}")
-                        else:
-                            destination = str(destination_raw).strip().replace('->', '-')  # Clean up
-                    else:
-                        destination = 'C5'
-                        logger.warning(f"No DB doc for {edge_id}; fallback destination {destination}")
-                    
-                    logger.debug(f"Reroute check for {edge_id}: start={start}, dest={destination}, current path len={len(remaining_path)}")
-
-                    # Get current state for computation (consistent method names)
-                    node_loads = self.get_current_loads()
-                    route_congestion = self.get_route_congestion()  # FIXED: Singular (adjust if yours is plural)
-                    predicted_loads = self.get_predicted_loads()
-                    
-                    # Compute new path
-                    new_path = self.planner.compute_path(
-                        start, destination, node_loads, route_congestion, predicted_loads=predicted_loads
-                    )
-                    
-                    if new_path and new_path != remaining_path:
-                        # Estimate ETA (add estimate_eta if missing: return (len(path)-1) / speed)
-                        edge_doc_retry = await self.db.edgeDevices.find_one({'id': edge_id})  # Re-fetch for speed
-                        edge_speed = edge_doc_retry.get('speed', 10) if edge_doc_retry else 10
-                        eta = (len(new_path) - 1) / edge_speed if len(new_path) > 1 else 0  # Hops / speed
-                        await self.mqtt_client.publish(
-                            f"harboursense/traffic/update/{edge_id}",  # FIXED: Specific topic for republish
-                            json.dumps({'suggestedPath': new_path, 'eta': eta})
-                        )
-                        logger.info(f"Rerouted {edge_id} from {start} to {destination}: {new_path} (ETA: {eta}s)")
-                    else:
-                        logger.debug(f"No improved path for {edge_id} (current: {remaining_path}; new: {new_path})")
-                else:
-                    logger.debug(f"Path sufficient for {edge_id} - len: {len(remaining_path)}")
-
+                logger.debug(
+                    "Analyzer metrics: edge=%s status=%s remainingPath=%s",
+                    edge_id,
+                    payload.get('status'),
+                    payload.get('remainingPath', []),
+                )
+                await self.analyze_metrics(triggered_by=f"Traffic event from {edge_id}")
             except UnicodeDecodeError as e:
-                logger.error(f"Payload decode error on {topic_str}: {e}; raw bytes: {message.payload[:50]}...")
+                logger.error(f"Payload decode error on {topic_str}: {e}")
             except json.JSONDecodeError as e:
-                logger.error(f"JSON parse error on {topic_str}: {e}; raw: {payload_str[:100]}...")
-            except (AttributeError, IndexError) as e:
-                logger.error(f"Topic parse error ({topic_str}): {e}; skipping message")
+                logger.error(f"JSON parse error: {e}")
             except Exception as e:
-                logger.error(f"Unexpected MQTT error on {topic_str}: {e}; continuing...")
-            
-        logger.info("MQTT listener ended (e.g., on shutdown)")
+                logger.error(f"Unexpected MQTT error: {e}")
+
+        logger.info("MQTT metrics listener ended")

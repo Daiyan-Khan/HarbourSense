@@ -4,6 +4,8 @@ const graphSeed = require('./test-graph.json');
 const edgeDeviceSeed = require('./test-edge.json');
 const sensorSeed = require('./sensor.json');
 const { getMongoSettings } = require('../runtime-config');
+const { runtimeDocumentFromSeed } = require('../lib/edge-collections');
+const { migrateEdgeSplit } = require('./migrate-edge-split');
 
 const mongoSettings = getMongoSettings();
 
@@ -121,11 +123,24 @@ async function seedMongo() {
     const edgeDocuments = deduplicateById('test-edge.json', edgeDeviceSeed.map(edgeDocument));
     const sensorDocuments = deduplicateById('sensor.json', sensorSeed);
 
+    const runtimeDocuments = [];
+    const assignmentDocuments = [];
+    for (const edge of edgeDocuments) {
+      const { runtime, assignment } = runtimeDocumentFromSeed(edge);
+      runtimeDocuments.push(runtime);
+      assignmentDocuments.push(assignment);
+    }
+
     const graphCollection = db.collection('graph');
     const graphIds = graphDocuments.map((doc) => doc.id);
     const graphPrune = await graphCollection.deleteMany({ id: { $nin: graphIds } });
     const graphResult = await upsertById(graphCollection, graphDocuments);
-    const edgeResult = await upsertById(db.collection('edgeDevices'), edgeDocuments);
+    const edgeResult = await upsertById(db.collection('edgeRuntime'), runtimeDocuments);
+    const assignmentResult = await upsertById(db.collection('edgeAssignments'), assignmentDocuments);
+    const runSplitMigration = (process.env.EDGE_SPLIT_MIGRATION || '').trim().toLowerCase() === 'true';
+    if (runSplitMigration) {
+      await migrateEdgeSplit(db);
+    }
     const sensorResult = await upsertById(db.collection('sensorList'), sensorDocuments);
 
     const resetWorkflow = (process.env.SEED_RESET_WORKFLOW || '').trim().toLowerCase() === 'true';
@@ -142,7 +157,8 @@ async function seedMongo() {
     }
 
     console.log(`graph: ${graphDocuments.length} docs from ${graphSeed.length} rows (pruned ${graphPrune.deletedCount}, ${JSON.stringify(graphResult)})`);
-    console.log(`edgeDevices: ${edgeDocuments.length} docs from ${edgeDeviceSeed.length} rows (${JSON.stringify(edgeResult)})`);
+    console.log(`edgeRuntime: ${runtimeDocuments.length} docs (${JSON.stringify(edgeResult)})`);
+    console.log(`edgeAssignments: ${assignmentDocuments.length} docs (${JSON.stringify(assignmentResult)})`);
     console.log(`sensorList: ${sensorDocuments.length} docs from ${sensorSeed.length} rows (${JSON.stringify(sensorResult)})`);
 
     await db.collection('shipments').createIndex({ status: 1 });

@@ -1,0 +1,26 @@
+{
+  "name": "harboursense",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reproducible smart-port simulation and free portfolio demo",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "demo": "node scripts/demo.mjs start",
+    "demo:status": "node scripts/demo.mjs status",
+    "demo:stop": "node scripts/demo.mjs stop",
+    "demo:reset": "node scripts/demo.mjs reset",
+    "demo:logs": "node scripts/demo.mjs logs",
+    "demo:build": "node scripts/build-demo.mjs",
+    "demo:preview": "node scripts/serve-demo.mjs",
+    "demo:record": "node scripts/record-demo.mjs",
+    "test:tooling": "node --test scripts/tests/*.test.mjs",
+    "test:e2e": "playwright test",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check:demo": "node scripts/verify-demo-build.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

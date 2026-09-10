@@ -20,6 +20,9 @@ def install_main_dependency_stubs():
             self.detail = detail
 
     class FastAPI:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def add_middleware(self, *args, **kwargs):
             return None
 
@@ -29,6 +32,10 @@ def install_main_dependency_stubs():
 
             return decorator
 
+    FastAPI.post = FastAPI.get
+    response_module = types.ModuleType('fastapi.responses')
+    response_module.StreamingResponse = lambda *args, **kwargs: None
+    sys.modules.setdefault('fastapi.responses', response_module)
     fastapi_module.FastAPI = FastAPI
     fastapi_module.HTTPException = HTTPException
     middleware_module = types.ModuleType("fastapi.middleware")
@@ -99,6 +106,11 @@ def install_main_dependency_stubs():
     sys.modules.setdefault("motor.motor_asyncio", motor_asyncio_module)
 
 
+try:
+    import pymongo  # Load its real BSON dependencies before optional-package stubs.
+except ImportError:
+    pass
+
 install_main_dependency_stubs()
 main = importlib.import_module("main")
 
@@ -118,6 +130,9 @@ class FailingAsyncCursor:
 
 
 class FailingCollection:
+    async def count_documents(self, query=None):
+        raise ServerSelectionTimeoutError('database unavailable')
+
     def find(self, *args, **kwargs):
         return FailingAsyncCursor()
 
@@ -136,6 +151,9 @@ class EmptyCollection:
 
 
 class FailingDb:
+    def __getitem__(self, key):
+        return FailingCollection()
+
     def __init__(self):
         self.edgeDevices = FailingCollection()
 

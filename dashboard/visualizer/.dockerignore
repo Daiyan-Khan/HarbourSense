@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+certs
+**/certs
+*.key
+*.pem
+*.crt
+*.pfx
+*.p12
+node_modules
+build
+coverage
+.npm-cache
+*.log
+.local-runtime

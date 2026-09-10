@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {"id":"normal","title":"A shipment through the port","description":"Follow a single shipment through offload, transport, storage and delivery.","seed":314,"defaultSpeed":1,"timeoutMs":240000,"shipments":[{"atMs":1000,"id":"demo-shipment-001","arrivalNode":"A1","destination":"B4"}],"faults":[]},
+    {"id":"congestion","title":"A congested route","description":"A repeatable occupancy bottleneck enters the real sensor and routing pipeline.","seed":314,"defaultSpeed":1,"timeoutMs":300000,"shipments":[{"atMs":1000,"id":"demo-shipment-001","arrivalNode":"A1","destination":"B4"}],"faults":[{"type":"occupancy","node":"A2","fromMs":0,"untilMs":65000,"reading":98}]},
+    {"id":"crane-fault","title":"A crane telemetry fault","description":"Synthetic overheating and vibration are processed by the anomaly model and maintenance manager.","seed":314,"defaultSpeed":1,"timeoutMs":300000,"shipments":[{"atMs":1000,"id":"demo-shipment-001","arrivalNode":"A1","destination":"B4"}],"faults":[{"type":"crane","fromMs":7000,"untilMs":17000,"motorTemp":115,"vibration":1.6,"energyUse":160}]}
+  ]
+}

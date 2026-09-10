@@ -19,6 +19,7 @@ test('completion topic uses canonical edge suffix shape', () => {
 
 test('task and traffic topics match shared contract', () => {
   assert.equal(contract.taskTopic('truck_tempo_1'), 'harboursense/edge/truck_tempo_1/task');
+  assert.equal(contract.routeTopic('truck_tempo_1'), 'harboursense/edge/truck_tempo_1/route');
   assert.equal(contract.trafficUpdateTopic('truck_tempo_1'), 'harboursense/traffic/update/truck_tempo_1');
   assert.equal(contract.shipmentTopic('shipment-42'), 'harboursense/shipments/shipment-42');
 });

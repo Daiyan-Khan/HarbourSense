@@ -4,9 +4,11 @@
 
 The portfolio edition has two modes: a complete local engineering demonstration and a static recorded simulation for a free public site. The public build replays observations captured from the local pipeline; it does not run a remote Python backend or anomaly model.
 
-[Local demo guide](docs/LOCAL_DEMO.md) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Implementation plan](PORTFOLIO_PLAN.md)
+[Local demo guide](docs/LOCAL_DEMO.md) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Release verification](docs/verification.md)
 
-**Publication status:** the public URL, final screenshots, walkthrough video and external-device verification are pending. A personal portfolio website has not been created; publishing HarbourSense comes first, with a link from a future personal site as a later step.
+**Publication status:** screenshots, an [88-second walkthrough](docs/media/harboursense-walkthrough.webm), real scenario recordings and local recovery checks are complete. GitHub CI and public deployment are the remaining release gates. A personal portfolio website will be built later.
+
+![HarbourSense recorded shipment journey and full port overview](docs/media/harboursense-overview.png)
 
 ## Try the local system
 

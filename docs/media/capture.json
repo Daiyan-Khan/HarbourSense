@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-10T13:55:42.069Z",
+  "previewUrl": "http://127.0.0.1:4173/HarbourSense/",
+  "build": {
+    "schemaVersion": 1,
+    "mode": "replay",
+    "basePath": "/HarbourSense",
+    "sourceRevision": null,
+    "sourceTreeDirty": true,
+    "builtAt": "2026-09-10T13:42:28.420Z"
+  },
+  "recordingHashes": {
+    "normal": "7b4eb09fd5191819dfc7c2e0dde3bab9a9bff7b1f33ade63f175145fafccf45d",
+    "congestion": "5f85672fb298875964c4fab48643f83ff7be62a1ada33b84f2b8166e7ce0dd43",
+    "crane-fault": "baba16b646e4693ee870f411c51dfdba2ba587ae03f04e4d71e423838d9710bb"
+  },
+  "video": {
+    "file": "harboursense-walkthrough.webm",
+    "durationSeconds": 87.84,
+    "playbackSpeed": 1,
+    "scenarioId": "normal",
+    "runId": "ff0bcc734a9143c1b9174673f358faf7",
+    "chapters": [
+      {
+        "title": "Recorded simulation with synthetic scenario inputs",
+        "wallTimeMs": 910
+      },
+      {
+        "title": "Follow the normal shipment journey",
+        "wallTimeMs": 3977
+      },
+      {
+        "title": "Pause to inspect a crane and its captured telemetry",
+        "wallTimeMs": 18143
+      },
+      {
+        "title": "Resume coordinated port operations",
+        "wallTimeMs": 28391
+      },
+      {
+        "title": "Inspect the shipment lifecycle and event timeline",
+        "wallTimeMs": 64356
+      },
+      {
+        "title": "The recorded shipment is delivered",
+        "wallTimeMs": 81957
+      }
+    ]
+  },
+  "screenshots": {
+    "harboursense-overview.png": {
+      "scenarioId": "normal",
+      "runId": "ff0bcc734a9143c1b9174673f358faf7",
+      "recordedTimeMs": 27689,
+      "deviceId": null,
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      }
+    },
+    "harboursense-crane-detail.png": {
+      "scenarioId": "crane-fault",
+      "runId": "bbbb452585c94d5399f1cd670af8e4a9",
+      "recordedTimeMs": 10738,
+      "deviceId": "crane001",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      }
+    },
+    "harboursense-mobile.png": {
+      "scenarioId": "normal",
+      "runId": "ff0bcc734a9143c1b9174673f358faf7",
+      "recordedTimeMs": 27659,
+      "deviceId": null,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  },
+  "mediaSha256": {
+    "harboursense-overview.png": "05e1be13ec3c523fa92b358d243b32524de12a05cbaf25760b790ae7e43bbf62",
+    "harboursense-crane-detail.png": "72b66fc55de049c9f14daf4f2f288151dedf0bb07ab0386527105cdaffea5194",
+    "harboursense-mobile.png": "16bf985bbd3c303074d37e304efeda81e91af12f9d483b8e2ba2d6e5fdb40f7b",
+    "harboursense-walkthrough.webm": "10b4da6ea8b1e3367f242df213fb5483b35dec9911f26974294ede22a1a2316d"
+  },
+  "laptop": {
+    "scenarioId": "normal",
+    "runId": "ff0bcc734a9143c1b9174673f358faf7",
+    "recordedTimeMs": 27931,
+    "deviceId": null,
+    "viewport": {
+      "width": 1280,
+      "height": 800
+    }
+  },
+  "checks": {
+    "realRecordingsVerified": true,
+    "noExternalOrApiRequests": true,
+    "noBrowserErrors": true,
+    "videoDurationWithin60To90Seconds": true,
+    "fullMapPaintedAndFitted": true,
+    "noMobileOverflow": true,
+    "noLaptopOverflow": true
+  }
+}

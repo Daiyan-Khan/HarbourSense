@@ -26,7 +26,7 @@ jobs:
         working-directory: dashboard/visualizer
         env: { CI: 'true' }
       - run: npm run demo:build
-        env: { DEMO_BASE_PATH: '/HarbourSense' }
+        env: { DEMO_BASE_PATH: '/HarbourSense', DEMO_REQUIRE_MEDIA: 'true' }
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/configure-pages@v5

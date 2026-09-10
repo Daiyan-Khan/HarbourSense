@@ -127,6 +127,8 @@ npm run demo:build
 
 The preview reads the built metadata rather than guessing its URL. Optional `DEMO_PREVIEW_PORT` selects another local preview port. Changing the preview port does not change the deployment subpath.
 
+The committed screenshots and walkthrough are copied into `build/media/` only when their capture hashes match the recordings. After making new recordings, first build and start the preview, then run `node scripts/capture-portfolio.mjs` from another terminal (root `npm ci` and Playwright Chromium are required). Inspect the generated `docs/media/` files and rebuild to include them. The Pages workflow requires matching media; local preview builds may omit outdated media so this recapture cycle remains possible.
+
 After recording, stop the full stack and keep only the static preview running. Test playback, selection, pause/resume, speed and reset in this condition. In the browser network panel, verify that requests remain on the preview origin and do not call `/api/`, localhost:8000 or another backend. Missing recordings are a real build error; do not replace them with hand-written output labeled as a captured run.
 
 ## Free publication and a future personal site

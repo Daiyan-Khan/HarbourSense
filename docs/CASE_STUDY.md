@@ -141,16 +141,11 @@ Weighted routing changes remaining route plans more often. The result concerns a
 
 The target public release uses GitHub Pages and clearly labeled recorded playback. The included hosting address and a public repository on GitHub Free provide the planned $0 recurring static-hosting path. Pages serves static files; it does not execute the complete Python/MQTT/MongoDB system. [GitHub Pages documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages)
 
-Pending release evidence:
+The [87.84-second walkthrough](media/harboursense-walkthrough.webm) follows a real recorded normal shipment, pauses for device inspection, and resumes through delivery. [Desktop](media/harboursense-overview.png), [crane-fault](media/harboursense-crane-detail.png) and [mobile](media/harboursense-mobile.png) screenshots show the verified dashboard. [Capture provenance](media/capture.json) links their hashes to the three recordings. Desktop, 1280-pixel laptop and 390-pixel mobile layouts were visually inspected.
 
-- Publish and verify the actual HTTPS demo URL; no public address is claimed here yet.
-- Capture polished desktop and narrow-screen screenshots from the verified build.
-- Record a 60–90 second walkthrough of the normal shipment journey, with separate screenshots showing the observed crane-fault response.
-- Verify published playback on another device/network with the developer laptop off, including independent resets and keyboard access.
-- Record successful fresh-stack CI and injected-interruption results for the final revision; configuration and unit tests alone are insufficient.
-- Create the personal portfolio site later and add the interactive demo, source and case-study links. There is no existing personal site to integrate yet.
+![An actual recorded crane anomaly, feature trends and maintenance alert](media/harboursense-crane-detail.png)
 
-These are plain pending items, not broken links to nonexistent images or a claim that an unavailable video has been recorded.
+The [verification ledger](verification.md) records completed local service recovery and browser checks. GitHub CI and public HTTPS deployment are still release gates. A literal physical second-device test with the laptop powered off has not been performed. The personal portfolio site and its links are a later task.
 
 ## Contribution attribution
 
@@ -160,6 +155,6 @@ The portfolio work adds reproducible local startup, guided scenarios, run isolat
 
 ## Next evidence to collect
 
-Priorities are repeatable real-pipeline scenario recordings, end-to-end recovery behavior and public access independent of the developer machine. Further model work should start with a better experiment and a defensible dataset, not tuning against the already reported held-out sequences. Full-backend public hosting can be considered separately if operating a persistent server becomes useful.
+The real-pipeline recordings and bounded recovery checks are complete. Further model work should start with a better experiment and a defensible dataset, not tuning against the already reported held-out sequences. Full-backend public hosting can be considered separately if operating a persistent server becomes useful.
 
 See [the implementation plan](../PORTFOLIO_PLAN.md) for the complete acceptance gates and [the local guide](LOCAL_DEMO.md) for the commands available today.

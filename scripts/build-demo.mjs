@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { ROOT } from './demo.mjs';
 import { normalizeBasePath, validateReplayDirectory } from './lib/demo-artifacts.mjs';
 import { verifyBuild } from './verify-demo-build.mjs';
@@ -17,6 +18,24 @@ try {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Dashboard build failed (${result.status}).`);
+  const mediaSource = path.join(ROOT, 'docs', 'media');
+  let capture;
+  try { capture = JSON.parse(await fs.readFile(path.join(mediaSource, 'capture.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const replayIndex = JSON.parse(await fs.readFile(path.join(frontend, 'public', 'replays', 'index.json'), 'utf8'));
+  const mediaMatches = capture && replayIndex.scenarios.every(scenario => capture.recordingHashes?.[scenario.id] === scenario.sha256);
+  if (mediaMatches) {
+    const mediaOutput = path.join(frontend, 'build', 'media');
+    await fs.mkdir(mediaOutput, { recursive: true });
+    for (const file of ['harboursense-overview.png', 'harboursense-crane-detail.png', 'harboursense-mobile.png', 'harboursense-walkthrough.webm']) {
+      const bytes = await fs.readFile(path.join(mediaSource, file));
+      if (createHash('sha256').update(bytes).digest('hex') !== capture.mediaSha256[file]) throw new Error(`Portfolio media hash differs: ${file}`);
+      await fs.writeFile(path.join(mediaOutput, file), bytes);
+    }
+  } else {
+    if (process.env.DEMO_REQUIRE_MEDIA === 'true') throw new Error('Capture portfolio media for these recordings before publication.');
+    console.log('Portfolio media omitted: preview this build, run node scripts/capture-portfolio.mjs, then rebuild to include matching media.');
+  }
   const revision = spawnSync('git', ['-c', `safe.directory=${ROOT.replaceAll('\\', '/')}`, 'rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
   const status = spawnSync('git', ['-c', `safe.directory=${ROOT.replaceAll('\\', '/')}`, 'status', '--porcelain'], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
   const dirty = status.status !== 0 || Boolean(status.stdout.trim());

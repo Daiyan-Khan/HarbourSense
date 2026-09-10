@@ -4,7 +4,7 @@ The checks below separate real service execution, recorded browser playback, and
 
 ## Local service evidence — 10 September 2026
 
-The final Docker run passed all seven [integration checks](verification/local-integration.json): retrying start, freezing clock and movement on pause, storage and delivery, resetting an active run, and recovering from separate API, MQTT and MongoDB interruptions without duplicate shipments. Recovery **plus shipment completion** took 26.9, 24.9 and 25.0 seconds respectively; these are not isolated reconnection latencies.
+The final Docker run passed all seven [integration checks](verification/local-integration.json): retrying start, freezing clock and movement on pause, storage and delivery, resetting an active run, and recovering from separate API, MQTT and MongoDB interruptions without duplicate shipments. Recovery **plus shipment completion** took 26.9, 24.9 and 25.0 seconds respectively; these are not isolated reconnection latencies. Each interruption test allows up to 60 wall-clock seconds for worker readiness and a further 150 seconds for shipment completion; exceeding either budget fails the check and preserves evidence.
 
 [CLI stop/start evidence](verification/local-persistence.json) verifies preserved run and shipment identity, paused state and resumed logical time. The test used Docker Desktop 29.1.3, Compose 2.40.3 and Node 24.12.0 on Windows with Linux containers. [Running backend source checks](verification/runtime-source.json) matched the final local files after normalizing line endings.
 
@@ -26,7 +26,9 @@ Exact wall-clock scheduling can vary between real service runs. These figures de
 
 ## Public release gate
 
-GitHub CI and deployed HTTPS verification are pending. The Pages workflow includes a separate Linux job that checks deployed revision metadata and exercises the public URL, all scenarios, visitor isolation and mobile keyboard controls without access to this laptop's backend.
+[GitHub CI passed all six jobs](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34485721207) on source revision `5f9ea78`: backend, simulator/tooling, analyzer/evaluation, real MQTT broker contracts, dashboard/replay browser checks, and fresh-stack startup/integration/live browser checks. This was a clean Ubuntu runner, independently rebuilding and running the complete stack.
+
+Deployed HTTPS verification is pending. The Pages workflow includes a separate Linux job that checks deployed revision metadata and exercises the public URL, all scenarios, visitor isolation and mobile keyboard controls without access to this laptop's backend.
 
 An independent cloud runner can demonstrate that playback needs only the published assets. A physical second-device test with the development laptop powered off has not been performed here and must not be reported as completed.
 

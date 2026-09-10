@@ -1,6 +1,6 @@
 # HarbourSense portfolio implementation plan
 
-Implementation ledger updated 10 September 2026. Checked items have local evidence; fresh GitHub CI and public deployment remain explicit release gates. See [release verification](docs/verification.md).
+Implementation ledger updated 10 September 2026. Checked items have linked evidence. Fresh GitHub CI has passed; public deployment remains an explicit release gate. See [release verification](docs/verification.md).
 
 **Confirmed scope update:** the personal website does not exist yet. Finish HarbourSense and its standalone free public demo first. Provide its demo URL, screenshots, and case-study material ready for the future website; building that website and adding its links are a later task, not a prerequisite for this release.
 
@@ -79,7 +79,7 @@ Primary areas: `dashboard/visualizer/src/App.js`, `dashboard.css`, `StatusPanels
 **3. Prove the first release works and recovers**
 
 - [x] Correct existing CI setup: provide the demo environment explicitly and replace the blanket MongoDB URI text scan, which matches legitimate validators and its own command, with credential-aware secret detection.
-- [ ] Keep existing unit, contract, and broker tests. Add a fresh-stack job that boots the isolated demo, seeds it, and runs the existing read-API smoke checks.
+- [x] Keep existing unit, contract, and broker tests. Add a fresh-stack job that boots the isolated demo, seeds it, and runs the existing read-API smoke checks.
 - [x] Add an integration check using real MongoDB and MQTT: run one shipment through its complete supported lifecycle and verify final storage/assignment state. Bound its duration and collect logs on failure.
 - [x] Add browser tests for demo start, visible progress, selection/details, completion, and reset. Retain Playwright traces on failures for browser state and network inspection.
 - [x] Test API restart, broker interruption, and temporary database unavailability during a run. Reconnect/resubscribe automatically with bounded backoff, reconcile a fresh snapshot, and prevent duplicate task execution or shipment state regression.
@@ -113,7 +113,7 @@ Primary areas: `python-backend/traffic_analyzer.py`, `port-sim/lib/crane-telemet
 - [x] Rewrite the README opening around the problem, what a visitor can try, and the demonstrated outcome. Keep installation details accessible below it or in a dedicated guide.
 - [x] Add an architecture diagram and a shipment/fault sequence diagram. Explain MQTT, SSE with polling fallback, the data model, task ownership, and recovery tradeoffs.
 - [x] Document personal contributions and any team contributions accurately, plus limitations and future work.
-- [ ] Record a 60–90 second walkthrough, capture polished screenshots, and publish reproducible benchmark/evaluation artifacts with their inputs.
+- [x] Record a 60–90 second walkthrough, capture polished screenshots, and publish reproducible benchmark/evaluation artifacts with their inputs.
 - [x] Build the first public demo as a GitHub Pages deployment with recordings from the real local scenarios. Reuse the dashboard through live/replay data adapters and label the public mode as recorded simulation.
 - [x] Provide scenario selection, device inspection, pause/resume, playback speed, and reset entirely within each visitor's browser. The published demo must not require the local API or share mutable playback state between visitors.
 - [ ] Add a tested GitHub Actions build/deployment workflow, configure the Pages repository subpath, and publish only the approved frontend and synthetic scenario assets over HTTPS.
@@ -204,4 +204,4 @@ For each batch, review the current diff first, preserve unrelated work, run the 
 - Public hosting budget is fixed at $0 recurring, with GitHub Pages and browser-based recorded scenarios planned for the first public release. The existing public repository is `Daiyan-Khan/HarbourSense`; the standalone demo uses its included Pages address. There is no personal website yet; no domain or personal-site integration is required for this release. Actual server-side backend hosting remains an optional later decision.
 - Contribution attribution confirmed: HarbourSense is a solo project. Credit it accordingly in the case study and future personal website.
 
-Remaining release work is fresh GitHub CI, final portfolio media, Pages publication and verification of the deployed site. Local startup, scenarios, controls, evaluations and browser journeys have passed the checks linked in the verification ledger.
+Remaining release work is Pages publication and verification of the deployed site. Fresh GitHub CI and final portfolio media have passed. Local startup, scenarios, controls, evaluations and browser journeys have passed the checks linked in the verification ledger.

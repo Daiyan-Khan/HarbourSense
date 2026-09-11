@@ -4,9 +4,13 @@
 
 The portfolio edition has two modes: a complete local engineering demonstration and a static recorded simulation for a free public site. The public build replays observations captured from the local pipeline; it does not run a remote Python backend or anomaly model.
 
-[Interactive demo](https://daiyan-khan.github.io/HarbourSense/) · [88-second walkthrough](https://daiyan-khan.github.io/HarbourSense/media/harboursense-walkthrough.webm) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Release verification](docs/verification.md)
+[Interactive demo](https://daiyan-khan.github.io/HarbourSense/) · [88-second walkthrough](https://daiyan-khan.github.io/HarbourSense/media/harboursense-walkthrough.webm) · [Project report (corrected public edition)](https://daiyan-khan.github.io/HarbourSense/reports/harboursense-report.pdf) · [Engineering case study](docs/CASE_STUDY.md) · [Measured evaluations](docs/evaluation.md) · [Release verification](docs/verification.md)
+
+For a future personal website or recruiter introduction, use the [portfolio integration and sharing guide](docs/PORTFOLIO_INTEGRATION.md). It contains the stable links, project description, images and ready-to-use HTML examples. Bookmark the demo or share its [Report & project info section](https://daiyan-khan.github.io/HarbourSense/#project-resources) with recruiters; visitors need no login or local setup.
 
 **Published on GitHub Pages:** all three scenarios work through recorded simulation in each visitor's browser, independently of the development laptop. [The deployment and public browser checks passed](https://github.com/Daiyan-Khan/HarbourSense/actions/runs/34486542398). The complete backend remains available through the local quick start below. A personal portfolio website will be built later.
+
+The report is a corrected public edition of the original academic write-up, with revised figures and reproducible evaluation results. The original source ZIP remains preserved unchanged locally; reviewed editable source is in [docs/report-source](docs/report-source/).
 
 ![HarbourSense recorded shipment journey and full port overview](docs/media/harboursense-overview.png)
 

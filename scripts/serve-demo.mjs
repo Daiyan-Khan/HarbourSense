@@ -20,7 +20,7 @@ export function resolveAsset(directory, base, requestUrl) {
 export async function serveDemo({ directory = path.join(ROOT, 'dashboard', 'visualizer', 'build'), port = 4173 } = {}) {
   const metadata = JSON.parse(await fs.readFile(path.join(directory, 'demo-build.json'), 'utf8'));
   const base = normalizeBasePath(metadata.basePath || '/');
-  const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webm': 'video/webm' };
+  const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webm': 'video/webm', '.pdf': 'application/pdf' };
   const server = http.createServer(async (request, response) => {
     if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405).end(); return; }
     const target = resolveAsset(directory, base, request.url);

@@ -1,0 +1,10 @@
+{
+  "report": {
+    "title": "HarbourSense project report",
+    "file": "harboursense-report.pdf",
+    "pages": 6,
+    "edition": "Corrected public edition",
+    "description": "Revised from the original academic report, with corrected figures and reproducible evaluation results. The original source archive is preserved.",
+    "sha256": "1f2b68678ac38e225bff30c7bfd362626dbbda29b945bd1870ab856051866be4"
+  }
+}

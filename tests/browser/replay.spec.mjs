@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { createHash } from 'node:crypto';
 
 function watchFailures(page, allowedOrigin) {
   const failures = [];
@@ -66,4 +67,35 @@ test('playback is independent between visitors and usable on a narrow keyboard v
     await first.keyboard.press('Escape');
     await expect(device).toBeFocused();
   } finally { await a.close(); await b.close(); }
+});
+
+test('project resources expose the project report with a verified PDF and an on-demand viewer', async ({ page, request, baseURL }) => {
+  const metadataResponse = await request.get(new URL('demo-build.json', baseURL).href);
+  expect(metadataResponse.ok()).toBe(true);
+  const metadata = await metadataResponse.json();
+  const failures = watchFailures(page, new URL(baseURL).origin);
+  const reportRequests = [];
+  page.on('request', item => { if (new URL(item.url()).pathname.includes('/reports/')) reportRequests.push(item.url()); });
+  await page.goto(baseURL);
+  await page.getByRole('link', { name: 'Report & project info', exact: true }).click();
+  const resources = page.getByRole('region', { name: 'About this project' });
+  await expect(resources).toBeVisible();
+  await expect(resources.getByRole('link', { name: /Engineering case study/ })).toHaveAttribute('href', 'https://github.com/Daiyan-Khan/HarbourSense/blob/main/docs/CASE_STUDY.md');
+  await expect(resources.locator('iframe')).toHaveCount(0);
+  expect(reportRequests).toEqual([]);
+  if (metadata.report) {
+    const url = new URL(`reports/${metadata.report.file}`, baseURL).href;
+    const response = await request.get(url);
+    expect(response.ok()).toBe(true);
+    expect(response.headers()['content-type']).toContain('application/pdf');
+    expect(createHash('sha256').update(await response.body()).digest('hex')).toBe(metadata.report.sha256);
+    await expect(resources.getByRole('link', { name: 'Download PDF' })).toHaveAttribute('download', '');
+    await resources.getByRole('button', { name: 'View report', exact: true }).click();
+    await expect(resources.getByTitle(`${metadata.report.title} PDF`)).toBeVisible();
+    await resources.getByRole('button', { name: 'Close report viewer', exact: true }).click();
+    await expect(resources.locator('iframe')).toHaveCount(0);
+  } else {
+    await expect(resources.getByRole('button', { name: 'View report', exact: true })).toHaveCount(0);
+  }
+  expect(failures).toEqual([]);
 });

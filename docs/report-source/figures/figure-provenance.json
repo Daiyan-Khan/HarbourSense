@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Corrected public report figures from committed offline synthetic experiments",
+  "pythonPackages": {
+    "matplotlib": "3.10.3",
+    "numpy": "1.26.4"
+  },
+  "inputs": {
+    "anomaly-results.json": "7a8c24451d416a48bb5c1889ce6c94b0fdaf2e3a77fca6c94d52b90ec7bdda53",
+    "routing-results.json": "bf8867862b7bf7f8ea0188b6535fade40d5564dcd554033bd494b7dc59bc252e"
+  },
+  "generatorSha256": "3babc5d42f79cdc137ed057b8223a55cc181a1774ae40363f87087c27d4c1ea8",
+  "figures": {
+    "anomaly-classification.pdf": "472810dab3002b32caffc826a5f010e671f97149babf70e69fc68c116e55be13",
+    "anomaly-classification.png": "ab98cdc0d6af03415620445e2fe4f2ee0c7b14e044d943476a939a62628f4576",
+    "anomaly-detection-delay.pdf": "eb04d1360fe8cd432152c033f7fef6018ae4ce75e2362af6b322acdc8b382c4b",
+    "anomaly-detection-delay.png": "38505b82d74e1767e285347952fefcb22aeac38aa9220b2d2cb3f09e2e42b11b",
+    "routing-outcomes.pdf": "16d8857749fedfd2bf66940446fb57e2b7b2eb54c62dacbe4254259884e9feba",
+    "routing-outcomes.png": "22ac0dfd0305c781cde8d0fb6500f4f3c2844bff49ea4afb10a9504b3b482117"
+  }
+}

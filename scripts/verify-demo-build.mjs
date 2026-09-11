@@ -5,12 +5,14 @@ import { pathToFileURL } from 'node:url';
 import { ROOT } from './demo.mjs';
 import { normalizeBasePath, validateReplayDirectory, walkFiles } from './lib/demo-artifacts.mjs';
 import { detectSecrets } from './check-secrets.mjs';
+import { verifyProjectReport } from './lib/project-report.mjs';
 
 export async function verifyBuild(directory = path.join(ROOT, 'dashboard', 'visualizer', 'build')) {
   const metadata = JSON.parse(await fs.readFile(path.join(directory, 'demo-build.json'), 'utf8'));
   if (metadata.mode !== 'replay' || metadata.schemaVersion !== 1) throw new Error('The build must explicitly select replay mode.');
   const base = normalizeBasePath(metadata.basePath || '/');
   await validateReplayDirectory(path.join(directory, 'replays'));
+  await verifyProjectReport(path.join(directory, 'reports'), metadata.report);
   const html = await fs.readFile(path.join(directory, 'index.html'), 'utf8');
   for (const [, url] of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
     if (url.startsWith('data:') || url.startsWith('#')) continue;

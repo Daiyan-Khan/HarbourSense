@@ -11,6 +11,7 @@ import { selectDataHealth } from './data/freshness';
 import { undirectedEdgeKey } from './map/layout';
 import PortNode from './nodes/PortNode';
 import DeviceMarkerNode from './nodes/DeviceMarkerNode';
+import ProjectResources from './ProjectResources';
 
 const nodeTypes = { port: PortNode, device: DeviceMarkerNode };
 function SideEdge({ id, sourceX, sourceY, targetX, targetY, data }) {
@@ -71,7 +72,7 @@ function App() {
       <div className="brand"><span className="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M6 21h20M9 21V9l12-4v16M21 5h6v4h-6M6 26c3-3 6 3 10 0s7 3 10 0" fill="none" stroke="currentColor" strokeWidth="2" /></svg></span><div><h1>HarbourSense <span>Smart Port</span></h1><p>Connected operations, in view.</p></div></div>
       <div className="dashboard-header-meta"><span className="source-pill">{sourceLabel}</span><span className={`health-pill health-pill--${health.tone}`}><span aria-hidden="true">●</span>{health.label}</span></div>
     </header>
-    <div className="workspace-heading"><div><span className="eyebrow">Harbour control / Overview</span><h2>A port in motion.</h2><p>Follow the cargo. Understand the decisions.</p></div><div className="freshness-note"><span>{health.ageLabel}</span><small>{source.kind === 'replay' ? (source.recordedAt ? `Captured ${new Date(source.recordedAt).toLocaleDateString()}` : 'Loading verified recordings') : source.transport || 'Connecting to local services'}</small>{(health.tone !== 'ok' || graph.status === 'error') && <button className="text-button" type="button" onClick={retry}>Retry connection</button>}</div></div>
+    <div className="workspace-heading"><div><span className="eyebrow">Harbour control / Overview</span><h2>A port in motion.</h2><p>Follow the cargo. Understand the decisions.</p><a className="project-info-jump" href="#project-resources">Report &amp; project info <span aria-hidden="true">↓</span></a></div><div className="freshness-note"><span>{health.ageLabel}</span><small>{source.kind === 'replay' ? (source.recordedAt ? `Captured ${new Date(source.recordedAt).toLocaleDateString()}` : 'Loading verified recordings') : source.transport || 'Connecting to local services'}</small>{(health.tone !== 'ok' || graph.status === 'error') && <button className="text-button" type="button" onClick={retry}>Retry connection</button>}</div></div>
     <Overview />
     <ScenarioPanel />
     {graph.status === 'loading' && <div className="dashboard-banner dashboard-banner--info" role="status">Loading port graph…</div>}
@@ -95,6 +96,7 @@ function App() {
         <details className="diagnostic-section" open={Boolean(panels.sensorAlerts.length || panels.maintenanceAlerts.length)}><summary>Alerts & maintenance <span>{panels.sensorAlerts.length + panels.maintenanceAlerts.length}</span></summary><SensorAlertsPanel alerts={panels.sensorAlerts} error={panels.errors.sensorAlerts} /><MaintenanceAlertsPanel alerts={panels.maintenanceAlerts} error={panels.errors.maintenanceAlerts} /></details>
         <div className="engineering-note"><span className="eyebrow">Under the surface</span><p>Devices coordinate over MQTT. The local system combines live telemetry, route planning and anomaly detection.</p><p>{source.kind === 'replay' ? 'This view replays captured outputs from that pipeline. It does not run a hosted prediction model.' : 'Inspect a device or shipment to see its assignment and operational context.'}</p></div>
       </aside>
+      <ProjectResources />
     </main>
     <footer className="dashboard-footer"><span>HarbourSense · Smart port operations</span><span>{source.kind === 'replay' ? 'Synthetic scenario data · independent browser playback' : 'Telemetry freshness: 15s · panel freshness: 30s'}</span></footer>
     {selectedDevice && <DeviceDetailModal device={selectedDevice} history={state.telemetryHistory} sensors={panels.sensors} craneTelemetry={panels.craneTelemetry} maintenanceAlerts={panels.maintenanceHistory.length ? panels.maintenanceHistory : panels.maintenanceAlerts} onClose={() => selectDevice(null)} />}

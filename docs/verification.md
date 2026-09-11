@@ -34,6 +34,13 @@ Fresh unauthenticated Chromium sessions also visually verified the public site a
 
 An independent cloud runner can demonstrate that playback needs only the published assets. A physical second-device test with the development laptop powered off has not been performed here and must not be reported as completed.
 
+## Report and portfolio resources — 11 September 2026
+
+The corrected public report contains six pages and three replacement plots derived from committed synthetic evaluation results. All six final pages were rendered with Poppler and visually inspected; the compiler reported no unresolved citations, overfull boxes, missing glyphs or font warnings. Two underfull spacing notices remained without visible layout defects. An independent source review checked the reported numbers and routing/model assumptions against the saved results and implementation. The original ZIP's SHA-256 is unchanged and recorded in [the editable report source guide](report-source/README.md).
+
+Local validation passed 111 dashboard tests, eight tooling tests and five production-replay browser journeys. The additional browser journey checks the resources link, verifies the report's PDF content type and release hash, opens its on-demand viewer, and closes it again. The production build contains 23 files totaling 15.7 MiB, including the report, with the existing three recordings and media preserved.
+
+The publication workflow repeats these checks and verifies the deployed PDF against the release metadata before running all five browser journeys on the public site. [Portfolio integration and sharing instructions](PORTFOLIO_INTEGRATION.md) describe the stable demo/report URLs and future website examples.
 ## Practical limits
 
 - Interruption tests are bounded single-host experiments. They do not cover every crash point, network partition or concurrency level.

@@ -6,10 +6,13 @@ import { createHash } from 'node:crypto';
 import { ROOT } from './demo.mjs';
 import { normalizeBasePath, validateReplayDirectory } from './lib/demo-artifacts.mjs';
 import { verifyBuild } from './verify-demo-build.mjs';
+import { verifyProjectReport } from './lib/project-report.mjs';
 
 const frontend = path.join(ROOT, 'dashboard', 'visualizer');
 try {
   const basePath = normalizeBasePath(process.env.DEMO_BASE_PATH || '/HarbourSense');
+  const resources = JSON.parse(await fs.readFile(path.join(frontend, 'src', 'projectResources.json'), 'utf8'));
+  const report = await verifyProjectReport(path.join(frontend, 'public', 'reports'), resources.report);
   await validateReplayDirectory(path.join(frontend, 'public', 'replays'));
   const result = spawnSync(process.execPath, ['node_modules/react-scripts/scripts/build.js'], {
     cwd: frontend, stdio: 'inherit', windowsHide: true,
@@ -42,6 +45,7 @@ try {
   await fs.writeFile(path.join(frontend, 'build', 'demo-build.json'), JSON.stringify({
     schemaVersion: 1, mode: 'replay', basePath, sourceRevision: !dirty && revision.status === 0 ? revision.stdout.trim() : null,
     sourceTreeDirty: dirty,
+    report,
     builtAt: new Date().toISOString(),
   }, null, 2) + '\n');
   await fs.writeFile(path.join(frontend, 'build', '.nojekyll'), '');

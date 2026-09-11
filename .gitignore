@@ -41,3 +41,15 @@ playwright-report/
 test-results/
 artifacts/local/
 .pytest_cache/
+
+# Rebuilt report output; keep the editable TeX and figure PDFs in source control.
+docs/report-source/build/
+docs/report-source/main.pdf
+docs/report-source/*.aux
+docs/report-source/*.bbl
+docs/report-source/*.blg
+docs/report-source/*.out
+docs/report-source/*.toc
+docs/report-source/*.fls
+docs/report-source/*.fdb_latexmk
+docs/report-source/*.synctex.gz

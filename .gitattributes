@@ -3,3 +3,11 @@ port-sim/entrypoint.sh text eol=lf
 dashboard/visualizer/public/replays/*.json text eol=lf
 # Saved experiment byte hashes must survive checkout on Windows and Linux.
 evaluation/results/* -text
+
+# Keep the report generator byte hash stable across platforms.
+docs/report-source/figures/generate_figures.py text eol=lf
+docs/report-source/*.tex text eol=lf
+docs/report-source/*.bib text eol=lf
+
+# Preserve the original vendored document class byte-for-byte.
+docs/report-source/IEEEtran.cls -text
